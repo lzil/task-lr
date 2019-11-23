@@ -1,5 +1,6 @@
 import numpy as np
 import pdb
+import os
 import matplotlib.pyplot as plt
 
 
@@ -154,6 +155,8 @@ for N in Ns:
     plt.ylabel('log MSE')
     plt.legend()
     plt.show()
+
+    save_path = os.path.join('figures', N, f'naive_sim_{N}_{q}')
     #plt.savefig('naive_sim_{}_{}_{}.png'.format(N,q,0.2))
     #plt.clf()
 
