@@ -16,20 +16,16 @@ task_map = {
     'delay_match': 1
 }
 
-def default_for(var, val):
-    if var is not None:
-        return var
-    return val
-
 
 class Trial:
     def __init__(self, hp, n_trials=100):
         self.n_trials = n_trials
         self.n_steps = hp['n_steps']
-        self.n_ring = hp['n_ring']
         self.n_tasks = hp['n_tasks']
-        self.n_feats = hp['n_features']
-        self.n_output = hp['n_output']
+        self.n_in_feats = hp['n_in_features']
+        self.n_in_ring = hp['n_in_ring']
+        self.n_out_choice = hp['n_out_choice']
+        self.n_out_ring = hp['n_out_ring']
 
         self.n_stim_steps = int(hp['n_steps'] * hp['stim_frac'])
 
@@ -50,18 +46,21 @@ class Trial:
         self.x_task = np.zeros([self.n_trials, self.n_steps, self.n_tasks])
 
         # placeholder
-        self.x_ring = np.zeros([self.n_trials, self.n_steps, self.n_ring])
+        self.x_ring = np.zeros([self.n_trials, self.n_steps, self.n_in_ring])
 
         # placeholder
-        self.x_feats = np.zeros([self.n_trials, self.n_steps, self.n_feats])
+        self.x_feats = np.zeros([self.n_trials, self.n_steps, self.n_in_feats])
 
         # placeholder
-        self.y_resp = np.zeros([self.n_trials, self.n_steps, self.n_output])
+        self.y_choice = np.zeros([self.n_trials, self.n_steps, self.n_out_choice])
+
+        # placeholder
+        self.y_ring = np.zeros([self.n_trials, self.n_steps, self.n_out_ring])
 
 
 
     # replace input values for ring and features
-    def put(self, task_id, ix=[0,None,0,None], ring=None, feats=None, resp=None):
+    def put(self, task_id, ix=[0,None,0,None], **kwargs):
         # indices 0 and 1 are batch start and stop points
         # indices 2 and 3 are step start and stop points
         if ix[0] is None:
@@ -74,24 +73,27 @@ class Trial:
             ix[3] = self.n_steps
 
         # set task id
-        self.x_task[ix[0]:ix[1],task_id] = 1
+        self.x_task[ix[0]:ix[1],:,task_id] = 1
+        self.x_task = 1000*np.random.randn(self.n_trials, self.n_steps, self.n_tasks)
         # randomly picking number of each type of permutations
-        if ring is not None:
-            self.x_ring[ix[0]:ix[1],ix[2]:ix[3],:] = ring
-        if feats is not None:
-            self.x_feats[ix[0]:ix[1],ix[2]:ix[3],:] = feats
-        if resp is not None:
-            self.y_resp[ix[0]:ix[1],ix[2]:ix[3],:] = resp
+        if 'in_ring' in kwargs:
+            self.x_ring[ix[0]:ix[1],ix[2]:ix[3],:] = kwargs['in_ring']
+        if 'in_feats' in kwargs:
+            self.x_feats[ix[0]:ix[1],ix[2]:ix[3],:] = kwargs['in_feats']
+        if 'out_choice' in kwargs:
+            self.y_choice[ix[0]:ix[1],ix[2]:ix[3],:] = kwargs['out_choice']
+        if 'out_ring' in kwargs:
+            self.y_ring[ix[0]:ix[1],ix[2]:ix[3],:] = kwargs['out_ring']
 
 
     def get_trial_data(self):
-        return [self.x_fix, self.x_task, self.x_ring, self.x_feats, self.y_fix, self.y_resp]
+        return [self.x_fix, self.x_task, self.x_ring, self.x_feats, self.y_fix, self.y_choice, self.y_ring]
 
 
 
 class TrialData(Dataset):
     def __init__(self, trials):
-        xy = [[] for i in range(6)]
+        xy = [[] for i in range(7)]
         for trial in trials:
             trial_xy = trial.get_trial_data()
             for i, z in enumerate(trial_xy):
@@ -113,8 +115,9 @@ class TrialData(Dataset):
             'x_task': self.xy[1][idx],
             'x_ring': self.xy[2][idx],
             'x_feats': self.xy[3][idx],
-            'y_fix': self.xy[4][idx],
-            'y_resp': self.xy[5][idx]
+            'y_fix': self.xy[4][idx].to(torch.int64),
+            'y_choice': self.xy[5][idx],
+            'y_ring': self.xy[6][idx]
             }
             
         return sample
