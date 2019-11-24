@@ -11,128 +11,154 @@ import matplotlib.pyplot as plt
 
 from torch.utils.data import Dataset, DataLoader
 
-import task
-
 
 def default_for(var, val):
     if var is not None:
         return var
     return val
 
+
+
+class SimpleRNN(nn.Module):
+    def __init__(self, n_input, n_rec, n_output, activation=torch.tanh):
+        super().__init__()
+
+        self.n_input = n_input
+        self.n_rec = n_rec
+        self.n_output = n_output
+
+        # random initial weight
+        self.W_input = torch.nn.Parameter(torch.randn(n_input, n_rec))
+        self.W_rec = torch.nn.Parameter(torch.randn(n_rec, n_rec))
+        self.b_rec = torch.nn.Parameter(torch.zeros(1, n_rec))
+        
+        self.W_output = torch.nn.Parameter(torch.randn(n_rec, n_output))
+        self.b_out = torch.nn.Parameter(torch.zeros(1, n_output))
+
+        self.activation = activation
+
+        self.h = torch.zeros(1, n_rec)
+        
+    def reset_hidden(self):
+        self.h = torch.zeros(1, self.n_rec)
+
+
+    def forward(self, X):
+        # X should be of size (1, n_input)
+        self.h = self.activation(
+            torch.mm(X, self.W_input) + \
+            torch.mm(self.h, self.W_rec) + \
+            self.b_rec)
+
+        self.out = self.activation(
+            torch.mm(self.h, self.W_output) + \
+            self.b_out)
+
+        return self.h, self.out
+
 class CleanRNN(nn.Module):
     def __init__(self, hp):
         super().__init__()
 
-        self.n_feats = hp['n_features']
-        self.n_task = hp['n_tasks']
-        self.n_ring = hp['n_ring']
+        self.n_input = hp['num_input']
+        self.n_rec = hp['num_rec']
+        self.n_output = hp['num_output']
 
-        self.n_rec = hp['n_rec']
-        self.n_output = hp['n_output']
-        self.n_steps = hp['n_steps']
-        self.activation = default_for(hp['activation'], torch.nn.Tanh())
+        self.n_steps = hp['run_steps']
+        self.activation = default_for(hp['activation'], 'tanh')
 
         self.batch_size = hp['batch_size']
 
-        # input weights, separated so it is easy to look at individual weights
-        self.W_fix = torch.nn.Parameter(torch.randn(1, self.n_rec))
-        self.W_ring = torch.nn.Parameter(torch.randn(self.n_ring, self.n_rec))
-        self.W_task = torch.nn.Parameter(torch.randn(self.n_task, self.n_rec))
-        self.W_feats = torch.nn.Parameter(torch.randn(self.n_feats, self.n_rec))
+        self.rnn_cell = torch.nn.RNNCell(
+            input_size=self.n_input,
+            hidden_size=self.n_rec,
+            bias=True,
+            nonlinearity=self.activation
+            )
 
-        # combination of the above weights into one input tensor
-        self.W_in = torch.cat([self.W_fix, self.W_task, self.W_ring, self.W_feats])
-
-        # recurrent weights
-        self.W_rec = torch.nn.Parameter(torch.randn(self.n_rec, self.n_rec))
-        self.b_rec = torch.nn.Parameter(torch.randn(1, self.n_rec))
-
-        # output layer
         self.output_layer = torch.nn.Linear(
             in_features=self.n_rec,
             out_features=self.n_output,
             bias=True
             )
 
-        # output fixation
-        self.output_fix_layer = torch.nn.Linear(
-            in_features=self.n_rec,
-            out_features=1
-            )
-
-        # hidden state
         self.rnn_rec = torch.randn(self.batch_size, self.n_rec)
 
-    # custom recurrent cell code, could just use torch.nn.RNNCell
-    def rec_cell(self, inp):
-        rnn_rec = self.activation(
-            torch.mm(inp, self.W_in) +
-            torch.mm(self.rnn_rec, self.W_rec) +
-            self.b_rec)
-        return rnn_rec
-
-    # reset hidden state between batches
     def reset_hidden(self):
         self.rnn_rec = torch.randn(self.batch_size, self.n_rec)
 
-    # run the RNN with a batch
-    def forward(self, x_fix, x_task, x_ring, x_feats):
-        # X is input, dims (n_steps, batch_size, n_input)
-        X = torch.cat([x_fix, x_task, x_ring, x_feats], dim=2).transpose(0, 1)
+    def forward(self, X):
+        # X is input, dims (num_steps, batch_size, num_rec)
 
-        rnn_recs = []
-        rnn_outs = []
-        rnn_fix_outs = []
+        self.rnn_recs = []
+        self.rnn_outs = []
         for in_step in X:
-            # recurrent step
-            self.rnn_rec = self.rec_cell(in_step)
-            # normal linear layer output
-            rnn_out = self.output_layer(self.rnn_rec)
-            # output of fixation is in [0,1]
-            rnn_fix_out = torch.nn.Sigmoid()(self.output_fix_layer(self.rnn_rec))
-            rnn_recs.append(self.rnn_rec)
-            rnn_outs.append(rnn_out)
-            rnn_fix_outs.append(rnn_fix_out)
+            self.rnn_rec = self.rnn_cell(in_step, self.rnn_rec)
+            self.rnn_out = self.output_layer(self.rnn_rec)
+            self.rnn_recs.append(self.rnn_rec)
+            self.rnn_outs.append(self.rnn_out)
 
-        return rnn_outs, rnn_fix_outs
+        return self.rnn_outs
+
+
+
+class TaskDataset(Dataset):
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        
+    def __len__(self):
+        return len(self.x)
+
+    def __getitem__(self, idx):
+        sample = {'x': torch.from_numpy(self.x[idx]).to(torch.float),
+                  'y': torch.from_numpy(self.y[idx]).to(torch.float)
+                 }
+            
+        return sample
 
 
 def get_default_hp():
     hp = {
         # number of epochs to train
-        'n_epochs': 2,
+        'num_epochs': 2,
         # learning rate of network
-        'learning_rate': 0.0005,
-        # number of different tasks
-        'n_tasks': 3,
-        # task id
-        'task_id': 1,
-        # number of features
-        'n_features': 10,
-        # number of units in the ring
-        'n_ring': 8,
+        'learning_rate': 0.01,
+        # number of input units
+        'num_input': 4,
         # number of recurrent units
-        'n_rec': 30,
+        'num_rec': 10,
         # number of output units
-        'n_output': 10,
+        'num_output': 4,
         # activation function
-        'activation': torch.nn.Tanh(),
+        'activation': 'tanh',
         # how many steps the RNN takes in total; i.e. how long the trial lasts
-        'n_steps': 15,
+        'run_steps': 50,
         # proportion of steps dedicated to fixating at stimulus (task instruction)
         'stim_frac': .2,
         # batch size for training
-        'batch_size': 10
+        'batch_size': 2
     }
 
     return hp
 
-# generate data loader
-def generate_data(hp, samples=3000):
+def generate_data(hp, samples=20):
+    stim_steps = int(hp['run_steps'] * hp['stim_frac'])
+    x_stim = np.zeros((samples, stim_steps, hp['num_input']), dtype=np.float)
+    y_stim = np.copy(x_stim)
+    x_go = np.zeros((samples, hp['run_steps'] - stim_steps, hp['num_input']), dtype=np.float)
+    y_go = np.copy(x_go)
 
-    trial = make_delay_match_trial(hp, samples)
+    # set the stimulus values, and correct response values
+    x_stim[:,:,[0,1]] = 1
+    y_stim[:,:,0] = 1
+    y_go[:,:,1] = 1
 
-    td = task.TrialData([trial])
+    # combine stimulus and responses
+    x_all = np.concatenate((x_stim, x_go), axis=1)
+    y_all = np.concatenate((y_stim, y_go), axis=1)
+
+    td = TaskDataset(x_all, y_all)
     dl = DataLoader(
         dataset=td,
         batch_size=hp['batch_size'],
@@ -141,28 +167,6 @@ def generate_data(hp, samples=3000):
         )
 
     return dl
-
-# test for delay match task
-def make_delay_match_trial(hp, n_trials):
-
-    trial = task.Trial(hp, n_trials=n_trials)
-
-    task_id = hp['task_id']
-    n_feats = hp['n_features']
-    n_output = hp['n_output']
-    rn = np.random.choice(range(1, n_trials), size=n_feats, replace=False)
-    rn = np.concatenate((np.array([0]), np.sort(rn), np.array([-1])))
-    for i in range(n_feats):
-        # set the stimulus and response values
-        v_feat = np.zeros([n_feats])
-        v_feat[i] = 1
-        v_resp = np.zeros([n_output])
-        v_resp[i] = 1
-        # features stimulus and response values
-        trial.put(task_id, ix=[rn[i],rn[i+1],None,trial.n_stim_steps], feats=v_feat)
-        trial.put(task_id, ix=[rn[i],rn[i+1],trial.n_stim_steps,None], resp=v_resp)
-
-    return trial
 
 
 def train(hp):
@@ -173,30 +177,23 @@ def train(hp):
     dl = generate_data(hp)
 
     train_losses = []
-    for epoch in range(hp['n_epochs']):
+    for epoch in range(hp['num_epochs']):
         train_loss = 0.0
         train_acc = 0.0
         
         net.train()
         
-        for i, data in enumerate(dl):
-            x_fix = data['x_fix']
-            x_task = data['x_task']
-            x_ring = data['x_ring']
-            x_feats = data['x_feats']
-            y_fix = data['y_fix']
-            y_resp = data['y_resp']
+        for i,data in enumerate(dl):
+            x_cur = data['x'].transpose(0,1)
+            y_cur = data['y'].transpose(0,1)
 
             
             net.reset_hidden()
             optimizer.zero_grad()
             
-            outs, fix_outs = net(x_fix, x_task, x_ring, x_feats)
-            outs_tensor = torch.cat([torch.stack(fix_outs), torch.stack(outs)], dim=2).transpose(0, 1)
-            y_tensor = torch.cat([y_fix, y_resp], dim=2)
-
-
-            loss = criterion(outs_tensor,y_tensor)
+            outs = net(x_cur)
+            out_tensor = torch.stack(outs)
+            loss = criterion(out_tensor,y_cur)
                     
             loss.backward()
             optimizer.step()
@@ -212,5 +209,7 @@ def train(hp):
 if __name__ == '__main__':
     hp = get_default_hp()
     train(hp)
+
+
 
 
