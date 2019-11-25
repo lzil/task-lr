@@ -32,8 +32,24 @@ def load_pickle(file):
     return data
 
 
-
+# replace value with default if equal to None
 def default_for(var, val):
     if var is not None:
         return var
     return val
+
+# one hot vector
+def one_hot(length, id):
+    v = np.zeros(length)
+    v[id] = 1
+    return v
+
+def angle(num, unit):
+    return (2 * np.pi) * (unit / num)
+
+# choose indices at random to break up a list of length length into num pieces
+def choose_index_breaks(length, num):
+    rn = np.random.choice(range(1, length-1), size=num-1, replace=False)
+    rn = np.concatenate((np.array([0]), np.sort(rn), np.array([length])))
+
+    return rn

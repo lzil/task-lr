@@ -13,150 +13,150 @@ from torch.utils.data import Dataset, DataLoader
 #from tensorboardX import SummaryWriter
 from torch.utils.tensorboard import SummaryWriter
 
+import time
+
 sys.path.insert(1, '../../')
 
-import network, task
+o_path = os.path.join('models', time.ctime().replace(' ', '_'))
+
+from network import *
+from trial import *
+
+from tools import *
+from dataset import *
+
+program_mode = 'train'
+verb = 'true'
+
 
 def get_default_hp():
     hp = {
         # number of epochs to train
-        'n_epochs': 50,
+        'n_epochs': 40,
+        # number of samples per epoch
+        'n_samples': 5000,
+        # batch size for training
+        'batch_size': 20,
         # learning rate of network
-        'learning_rate': 0.001,
+        'learning_rate': 0.005,
         # number of different tasks
         'n_tasks': 6,
-        # task id
-        'task_id': 1,
         # number of features
-        'n_in_features': 10,
+        'n_in_features': 0,
         # number of units in the input ring
-        'n_in_ring': 0,
+        'n_in_ring': 24,
         # number of recurrent units
-        'n_rec': 30,
+        'n_rec': 50,
         # number of discrete choice output units
-        'n_out_choice': 10,
+        'n_out_choice': 0,
         # number of units in the output ring
-        'n_out_ring': 0,
+        'n_out_ring': 24,
         # activation function
         'activation': torch.tanh,
         # how many steps the RNN takes in total; i.e. how long the trial lasts
         'n_steps': 30,
         # proportion of steps dedicated to fixating at stimulus (task instruction)
         'stim_frac': .4,
-        # batch size for training
-        'batch_size': 20,
+        # rnn type
+        'rnn_type': 'gru',
         # residual proportion for RNNs
-        'alpha': 0,
+        'alpha': 0.2,
+        # recurrent noise in RNNs,
+        'sigma_rec': 0.05,
+        # input noise in RNNs
+        'sigma_inp': 0.01,
         # free steps after fixation before action is required
-        'free_steps': 3
+        'choice_delay': 3
     }
 
     return hp
 
 
-# generate data loader
-def generate_data(hp, samples=3000):
+def get_loss_weights(hp):
+    loss_weights = {}
 
-    # first make this simple trial work
-    trial = make_delay_match_trial(hp, samples)
+    batch_size = hp['batch_size']
+    n_steps = hp['n_steps']
+    n_stim_steps = int(hp['n_steps'] * hp['stim_frac'])
 
-    td = task.TrialData([trial])
-    dl = DataLoader(
-        dataset=td,
-        batch_size=hp['batch_size'],
-        shuffle=True,
-        drop_last=True
-        )
+    # choices made during go time are more important
+    # out_choice; dims (batch_size, n_steps, n_out_choice)
+    out_choice = torch.ones((batch_size, n_steps, hp['n_out_choice']))
+    out_choice[:,n_stim_steps:,:] = 2
+    out_choice[:,n_stim_steps:n_stim_steps+hp['choice_delay'],:] = 0
+    loss_weights['out_choice'] = out_choice
 
-    return dl
+    # out_fix; dims (batch_size, n_steps, 1)
+    out_fix = torch.ones((batch_size, n_steps, 1))
+    out_fix[:,n_stim_steps:n_stim_steps+hp['choice_delay'],:] = 0
+    loss_weights['out_fix'] = out_fix
 
+    # ring choices made during go time are more important
+    # out_ring; dims (batch_size, n_steps, n_out_ring)
+    out_ring = torch.ones((batch_size, n_steps, hp['n_out_ring']))
+    out_ring[:,n_stim_steps:,:] = 2
+    out_ring[:,n_stim_steps:n_stim_steps+hp['choice_delay'],:] = 0
+    loss_weights['out_ring'] = out_ring
 
-# test for delay match task
-def make_delay_match_trial(hp, n_trials):
+    # L1 loss
+    loss_weights['l1'] = 1e-6
 
-    trial = task.Trial(hp, n_trials=n_trials)
+    # L2 loss
+    n_input = 1 + hp['n_tasks'] + hp['n_in_features'] + hp['n_in_ring']
+    #Z = torch.ones((batch_size, n_steps, ))
 
-    task_id = hp['task_id']
-    n_in_feats = hp['n_in_features']
-    n_out_choice = hp['n_out_choice']
-    rn = np.random.choice(range(1, n_trials), size=n_in_feats-1, replace=False)
-    rn = np.concatenate((np.array([0]), np.sort(rn), np.array([n_trials])))
-    for i in range(n_in_feats):
-        # set the stimulus and response values
-        v_feat = np.zeros([n_in_feats])
-        v_feat[i] = 1
-        v_choice = np.zeros([n_out_choice])
-        v_choice[i] = 5
-        # features stimulus and response values
-        trial.put(task_id, ix=[rn[i],rn[i+1],None,trial.n_stim_steps], in_feats=v_feat)
-        trial.put(task_id, ix=[rn[i],rn[i+1],trial.n_stim_steps,None], out_choice=v_choice)
+    return loss_weights
 
-    # v_feat = np.zeros([n_in_feats])
-    # v_feat[0] = 1
-    # v_choice = np.zeros([n_out_choice])
-    # v_choice[0] = 0
-    # # features stimulus and response values
-    # trial.put(task_id, ix=[None,None,None,trial.n_stim_steps], in_feats=v_feat)
-    # trial.put(task_id, ix=[None,None,trial.n_stim_steps,None], out_choice=v_choice)
-
-    return trial
-
-
-def make_graph(hp):
-    net = network.TaskLSTM(hp)
-    writer = SummaryWriter()
-    dl = generate_data(hp)
-
-    # get some random training images
-    dataiter = iter(dl)
-    data = dataiter.next()
-
-    x_fix = data['x_fix']
-    x_task = data['x_task']
-    x_ring = data['x_ring']
-    x_feats = data['x_feats']
-
-    # responses: dims (batch_size, n_steps, *)
-    y_fix = data['y_fix']
-    y_choice = data['y_choice']
-    y_ring = data['y_ring']
-    
-    # X is input to network; dims (batch_size, n_steps, n_input)
-    X = torch.cat([x_fix, x_task, x_ring, x_feats], dim=2)
-
-    # create grid of images
-
-    writer.add_graph(net, X)
 
 def train(hp):
-    net = network.TaskGRU(hp)
+    rnnt = hp['rnn_type']
+    if rnnt == 'rnn':
+        net = TaskRNN(hp)
+    elif rnnt == 'gru':
+        net = TaskGRU(hp)
+    elif rnnt == 'lstm':
+        net = TaskLSTM(hp)
+
+    print(f'Net ({rnnt}) initialized.')
 
     writer = SummaryWriter()
 
-    fix_criterion = nn.CrossEntropyLoss()
-    choice_criterion = nn.MSELoss()
-    ring_criterion = nn.MSELoss()
     optimizer = optim.Adam(net.parameters(), lr=hp['learning_rate'])
-    # net_params = [net.W_task]#, net.W_feats, net.W_fix, net.W_rec, net.fix_out_layer.weight, net.choice_out_layer.weight]
 
     n_stim_steps = int(hp['n_steps'] * hp['stim_frac'])
-    fs = hp['free_steps']
 
-    dl = generate_data(hp)
+    dl = get_data_loader(hp, data_path='data/Mon_Nov_25_21:02:32_2019/1')
 
-    # for the 3 kinds of losses
-    train_losses = [[] for l in range(3)]
 
+    # loss criteria and variables
+    fix_criterion = nn.BCEWithLogitsLoss(reduction='none')
+    choice_criterion = nn.BCEWithLogitsLoss(reduction='none')
+    ring_criterion = nn.BCEWithLogitsLoss(reduction='none')
+    l1_criterion = nn.L1Loss()
+
+    losses = []
+    loss_weights = get_loss_weights(hp)
+    loss_types = list(loss_weights.keys())
+    losses_weighted = {key:[] for key in loss_types}
+
+    print(f'Training a ({rnnt}):\n\t \
+        epochs: {hp["n_epochs"]}\n\t \
+        samples: {hp["n_samples"]}\n\t \
+        batch_size: {hp["batch_size"]}\
+        ')
 
     g_step = 0
     for epoch in range(hp['n_epochs']):
-        train_loss = 0.0
-        train_acc = 0.0
         
         net.train()
-        
         for i, data in enumerate(dl):
             g_step += 1
+            losses_unweighted = {}
+
+            # reset the network except for the weights
+            net.reset_hidden()
+            optimizer.zero_grad()
+
             # inputs; dims (batch_size, n_steps, *)
             x_fix = data['x_fix']
             x_task = data['x_task']
@@ -168,15 +168,13 @@ def train(hp):
             y_choice = data['y_choice']
             y_ring = data['y_ring']
 
-            # reset the network except for the weights
-            net.reset_hidden()
-            optimizer.zero_grad()
             
             # X is input to network; dims (batch_size, n_steps, n_input)
             X = torch.cat([x_fix, x_task, x_ring, x_feats], dim=2)
             
             # Y is correct response to network; dims (batch_size, n_steps, n_input)
             Y = torch.cat([y_fix, y_choice, y_ring], dim=2)
+
 
             """
             TODO create a test for this
@@ -191,65 +189,104 @@ def train(hp):
             fix_outs, choice_outs, ring_outs = net(X)
             Z = torch.cat([fix_outs, choice_outs, ring_outs], dim=2)
 
-            # give fix_outs a free pass for fs timesteps following the fixation stimulus
-            # by dissecting fix_outs to become fix_outs_mod
-            # fix_outs_spliced, y_fix_spliced; dims(batch_size, n_steps-fs, 1)
-            fix_outs_spliced = torch.cat([fix_outs[:,:n_stim_steps,:], fix_outs[:,n_stim_steps+fs:,:]], dim=1)
-            y_fix_spliced = torch.cat([y_fix[:,:n_stim_steps,:], y_fix[:,n_stim_steps+fs:,:]], dim=1)
+            # apply criteria to calculate unweighted losses
+            losses_unweighted['out_fix'] = fix_criterion(fix_outs, y_fix)
+            losses_unweighted['out_choice'] = choice_criterion(choice_outs, y_choice)
+            losses_unweighted['out_ring'] = ring_criterion(ring_outs, y_ring)
 
-            # fix_outs_mod; dims (batch_size, 2, n_steps-fs)
-            # y_fix_mod; dims (batch_size, n_steps-fs)
-            # fix_outs_mod = torch.cat([fix_outs_spliced, torch.zeros_like(fix_outs_spliced)], dim=2).transpose(1,2)
-            fix_outs_trans = fix_outs_spliced.transpose(1,2)
-            fix_outs_opp = torch.zeros_like(fix_outs_trans, requires_grad=False)
-            fix_outs_mod = torch.cat([fix_outs_trans,fix_outs_opp], dim=1)
-            y_fix_mod = torch.squeeze(y_fix_spliced.transpose(1,2)).to(torch.int64)
+            # l1 regularization
+            l1 = 0
+            for p in net.parameters():
+                l1 += p.abs().sum()
+            losses_unweighted['l1'] = l1
 
-            # calculate the losses
-            fix_loss = fix_criterion(fix_outs_mod, y_fix_mod)
-            choice_loss = choice_criterion(choice_outs, y_choice)
-            ring_loss = ring_criterion(ring_outs, y_ring)
+            # l2 regularization
+            # TODO
+            
 
-            loss = choice_loss + ring_loss + fix_loss
-             
+            # weight the losses and sum them to form the actual loss
+            loss = 0
+            for l in loss_types:
+                # sum across the loss type, then mean across steps and batches so losses are equally important
+                # val = torch.mean(torch.sum(losses_unweighted[l] * loss_weights[l],dim=2))
+                if losses_unweighted[l].numel() > 0:
+                    val = torch.mean(losses_unweighted[l] * loss_weights[l])
+                    losses_weighted[l].append(val.detach().item())
+                    loss += val
+                else:
+                    losses_weighted[l].append(0)
+
+            losses.append(loss.detach().item())
+            
             # propagate the losses       
             loss.backward()
             optimizer.step()
 
-            for idx, p in enumerate(net.params):
-                # writer.add_scalar(f'grad_{idx}', torch.mean(p.grad), g_step)
-                # writer.add_scalar(f'param_{idx}', torch.mean(torch.abs(p)), g_step)
-                writer.add_histogram(f'W_{idx}', p, g_step)
-
-            train_losses[0].append(fix_loss.detach().item())
-            train_losses[1].append(choice_loss.detach().item())
-            train_losses[2].append(ring_loss.detach().item())
-
-            for idx in range(2):
-                writer.add_scalar(f'loss_{idx}', train_losses[idx][-1], g_step)
+            # add losses to tensorboard
+            for l in loss_types:
+                writer.add_scalar(f'loss_{l}', losses_weighted[l][-1], g_step)
+            writer.add_scalar('total loss', loss, g_step)
 
             if g_step % 50 == 0:
-                
-                writer.add_image('stimulus', X[0,:,:], g_step, dataformats='HW')
-                writer.add_image('response', Z[0,:,:], g_step, dataformats='HW')
-                writer.add_image('Y', Y[0,:,:], g_step, dataformats='HW')
+                # add weights to tensorboard
+                for k,v in net.state_dict().items():
+                    if v.numel() != 0:
+                        writer.add_histogram(k, v, g_step)
+                # add simple visualization to tensorboard
+                writer.add_image('X/Y/Z', torch.cat([X,Y,torch.sigmoid(Z)],dim=2)[0,:,:], g_step, dataformats='HW')
+                if g_step % 1000 == 0 and program_mode != 'debug':
+                    # save checkpoint
+                    ckpt_path = os.path.join(o_path, str(g_step)+'.tar')
+                    torch.save(net.state_dict(), ckpt_path)
+    
+        avg_loss = np.mean(np.array(losses[-20:]))
+        print(f'Epoch {epoch} completed. Loss: {avg_loss}')
 
     writer.close()
+
+    print(f'Finished running.\n\tSteps:{g_step}')
+
+
+    pdb.set_trace()
+# def make_graph(hp):
+#     net = TaskLSTM(hp)
+#     writer = SummaryWriter()
+#     dl = get_data_loader(hp)
+
+#     # get some random training images
+#     dataiter = iter(dl)
+#     data = dataiter.next()
+
+#     x_fix = data['x_fix']
+#     x_task = data['x_task']
+#     x_ring = data['x_ring']
+#     x_feats = data['x_feats']
+
+#     # responses: dims (batch_size, n_steps, *)
+#     y_fix = data['y_fix']
+#     y_choice = data['y_choice']
+#     y_ring = data['y_ring']
     
-    # for l in range(3):  
-    #     plt.plot(train_losses[l], label=f'loss type {l}')
-    # param_difs = []
-    # for i in range(len(param_vals[0]) - 1):
-    #     param_difs.append(np.mean((param_vals[0][i+1] - param_vals[0][i]).numpy()))
-    # for p in range(len(param_difs)):
-    # plt.plot(param_difs)
-    # plt.legend()
-    # plt.show()
-    #pdb.set_trace()
+#     # X is input to network; dims (batch_size, n_steps, n_input)
+#     X = torch.cat([x_fix, x_task, x_ring, x_feats], dim=2)
 
+#     # create grid of images
 
+#     writer.add_graph(net, X)
 
 
 if __name__ == '__main__':
-    hp = get_default_hp()
+    if program_mode == 'train':
+        mkdir_p(o_path)
+        hp = get_default_hp()
+
+    if program_mode == 'debug':
+        hp = get_default_hp()
+        hp['n_epochs'] = 1
+        hp['n_samples'] = 500
+        hp['batch_size'] = 5
+
     train(hp)
+
+
+
