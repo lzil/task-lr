@@ -60,7 +60,7 @@ class Trial:
 
 
     # replace input values for ring and features
-    def put(self, task_id, ix=[0,None,0,None], **kwargs):
+    def put(self, task_id, ix=[None,None,None,None], **kwargs):
         # indices 0 and 1 are batch start and stop points
         # indices 2 and 3 are step start and stop points
         if ix[0] is None:
@@ -74,8 +74,7 @@ class Trial:
 
         # set task id
         self.x_task[ix[0]:ix[1],:,task_id] = 1
-        self.x_task = 1000*np.random.randn(self.n_trials, self.n_steps, self.n_tasks)
-        # randomly picking number of each type of permutations
+        #self.x_task = np.random.randn(self.n_trials, self.n_steps, self.n_tasks)
         if 'in_ring' in kwargs:
             self.x_ring[ix[0]:ix[1],ix[2]:ix[3],:] = kwargs['in_ring']
         if 'in_feats' in kwargs:
@@ -115,7 +114,7 @@ class TrialData(Dataset):
             'x_task': self.xy[1][idx],
             'x_ring': self.xy[2][idx],
             'x_feats': self.xy[3][idx],
-            'y_fix': self.xy[4][idx].to(torch.int64),
+            'y_fix': self.xy[4][idx],
             'y_choice': self.xy[5][idx],
             'y_ring': self.xy[6][idx]
             }
