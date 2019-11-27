@@ -23,18 +23,25 @@ class TaskNet(nn.Module, ABC):
         self.n_task = hp['n_tasks']
         self.n_in_feats = hp['n_in_features']
         self.n_in_ring = hp['n_in_ring']
-        self.in_dim = 1 + self.n_task + self.n_in_feats + self.n_in_ring
+        self.n_input = 1 + self.n_task + self.n_in_feats + self.n_in_ring
         self.n_rec = hp['n_rec']
         self.n_out_choice = hp['n_out_choice']
         self.n_out_ring = hp['n_out_ring']
 
         self.n_steps = hp['n_steps']
-        self.activation = hp['activation']
         self.batch_size = hp['batch_size']
+
+        if hp['activation'] == 'tanh':
+            self.activation = torch.tanh
+        elif hp['activation'] == 'relu':
+            self.activation = torch.ReLU
+        elif hp['activation'] == 'softplus':
+            self.activation = torch.nn.Softplus()
 
         self.alpha = hp['alpha']
 
         self.sigma_rec = hp['sigma_rec']
+        self.noise_const = np.sqrt(2 / self.alpha) * self.sigma_rec
         self.randn_gen = distributions.Normal(0, 1)
 
         # fixation output
@@ -60,8 +67,7 @@ class TaskNet(nn.Module, ABC):
 
 
         # hidden state; dims (batch_size, n_rec)
-        self.state = torch.randn(self.batch_size, self.n_rec)
-        self.state = torch.zeros((self.batch_size, self.n_rec))
+        self.state = torch.randn(*(self.batch_size, self.n_rec))
 
     # implementation of recurrent computation
     @abstractmethod
@@ -81,11 +87,15 @@ class TaskNet(nn.Module, ABC):
         for in_step in X:
             # recurrent step
             state = self._cell(in_step)
+
+            # rnn outs; dims (batch_size, *)
             # magnitude of fixation choice
             rnn_fix = self.fix_out_layer(state)
             # normal linear layer choices. TODO maybe use sigmoid instead cus it's just attention? think about it
             rnn_choice = self.choice_out_layer(state)
             rnn_ring = self.ring_out_layer(state)
+
+            # rnn_out = torch.cat([rnn_fix, rnn_choice, rnn_ring], dim=2)
 
             rnn_outs[0].append(rnn_fix)
             rnn_outs[1].append(rnn_choice)
@@ -103,7 +113,7 @@ class TaskRNN(TaskNet):
         super().__init__(hp)
 
         # input weights
-        self.W_in = nn.Parameter(torch.randn(self.in_dim, self.n_rec))
+        self.W_in = nn.Parameter(torch.randn(self.n_input, self.n_rec))
 
         # recurrent weights
         self.W_rec = torch.nn.Parameter(torch.randn(self.n_rec, self.n_rec))
@@ -111,7 +121,7 @@ class TaskRNN(TaskNet):
 
     # custom recurrent cell code, could just use torch.nn.RNNCell
     def _cell(self, inp):
-        noise = np.sqrt(2 / self.alpha) * self.sigma_rec * self.randn_gen.rsample((self.batch_size, self.n_rec))
+        noise = self.noise_const * self.randn_gen.rsample((self.batch_size, self.n_rec))
         state = self.activation(
             torch.mm(inp, self.W_in) +
             torch.mm(self.state, self.W_rec) +
@@ -125,7 +135,7 @@ class TaskRNN(TaskNet):
         return self.state
 
     def reset_hidden(self):
-        self.state = torch.zeros((self.batch_size, self.n_rec))
+        self.state = torch.randn(*(self.batch_size, self.n_rec))
 
 
 
@@ -138,10 +148,10 @@ class TaskLSTM(TaskNet):
 
 
         # gates
-        self.W_f = nn.Parameter(torch.randn(self.in_dim + self.n_rec, self.n_rec))
-        self.W_i = nn.Parameter(torch.randn(self.in_dim + self.n_rec, self.n_rec))
-        self.W_C = nn.Parameter(torch.randn(self.in_dim + self.n_rec, self.n_rec))
-        self.W_o = nn.Parameter(torch.randn(self.in_dim + self.n_rec, self.n_rec))
+        self.W_f = nn.Parameter(torch.randn(self.n_input + self.n_rec, self.n_rec))
+        self.W_i = nn.Parameter(torch.randn(self.n_input + self.n_rec, self.n_rec))
+        self.W_C = nn.Parameter(torch.randn(self.n_input + self.n_rec, self.n_rec))
+        self.W_o = nn.Parameter(torch.randn(self.n_input + self.n_rec, self.n_rec))
 
         # gate biases
         self.b_f = nn.Parameter(torch.randn(1, self.n_rec))
@@ -150,7 +160,7 @@ class TaskLSTM(TaskNet):
         self.b_o = nn.Parameter(torch.randn(1, self.n_rec))
 
         # cell state present in LSTMs
-        self.C = torch.zeros(self.batch_size, self.n_rec)
+        self.C = torch.randn(*(self.batch_size, self.n_rec))
 
 
     def _cell(self, inp):
@@ -174,8 +184,8 @@ class TaskLSTM(TaskNet):
         return self.state
 
     def reset_hidden(self):
-        self.state = torch.zeros((self.batch_size, self.n_rec))
-        self.C = torch.zeros((self.batch_size, self.n_rec))
+        self.state = torch.randn(*(self.batch_size, self.n_rec))
+        self.C = torch.randn(*(self.batch_size, self.n_rec))
 
 
 
@@ -187,9 +197,9 @@ class TaskGRU(TaskNet):
         super().__init__(hp)
 
         # gates and weights
-        self.W_z = nn.Parameter(torch.randn(self.in_dim + self.n_rec, self.n_rec))
-        self.W_r = nn.Parameter(torch.randn(self.in_dim + self.n_rec, self.n_rec))
-        self.W = nn.Parameter(torch.randn(self.in_dim + self.n_rec, self.n_rec))
+        self.W_z = nn.Parameter(torch.randn(self.n_input + self.n_rec, self.n_rec))
+        self.W_r = nn.Parameter(torch.randn(self.n_input + self.n_rec, self.n_rec))
+        self.W = nn.Parameter(torch.randn(self.n_input + self.n_rec, self.n_rec))
 
         # gate biases
         self.b_z = nn.Parameter(torch.randn(1, self.n_rec))
@@ -207,7 +217,7 @@ class TaskGRU(TaskNet):
         r = torch.sigmoid(torch.mm(cat, self.W_r) + self.b_r)
         rcat = torch.cat([r * self.state, inp], dim=1)
 
-        noise = np.sqrt(2 / self.alpha) * self.sigma_rec * self.randn_gen.rsample((self.batch_size, self.n_rec))
+        noise = self.noise_const * self.randn_gen.rsample((self.batch_size, self.n_rec))
         h_tilde = torch.tanh(torch.mm(rcat, self.W) + self.b + noise)
 
         # hidden state; dims (batch_size, n_rec)
@@ -216,7 +226,7 @@ class TaskGRU(TaskNet):
 
 
     def reset_hidden(self):
-        self.state = torch.zeros((self.batch_size, self.n_rec))
+        self.state = torch.randn(*(self.batch_size, self.n_rec))
 
 
 

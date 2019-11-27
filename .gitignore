@@ -1,5 +1,7 @@
 figures/
 gamma_graphs/
-**runs/
+runs/
+models/
+data/
 
 **__pycache__/

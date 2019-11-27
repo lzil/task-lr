@@ -7,13 +7,13 @@
 - implement more tasks
 - define better loss functions
 - write tests in code
-- L2 regularization
-- dataset saving / loading, model saving / loading interface
+- dataset saving / loading, model saving / loading interface (argparse)
 - better documentation for some files
-- fix ring_average task
-- variable amounts of fixation / stimulus / response time
+- figure out better way to visualize arrays
 
 ## Done
 
 - implement rings
 - use more general stimulus/response representations
+- fix ring_average task
+- variable amounts of fixation / stimulus / response time
