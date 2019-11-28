@@ -7,6 +7,8 @@ import sys
 import pdb
 import numpy as np
 import matplotlib.pyplot as plt
+import scipy.special as sps
+from PIL import Image
 
 from torch.utils.data import Dataset, DataLoader
 
@@ -31,12 +33,10 @@ def get_default_hp():
     hp = {
         # number of epochs to train
         'n_epochs': 600,
-        # number of samples per epoch
-        'n_samples': 5000,
         # batch size for training
         'batch_size': 20,
         # learning rate of network
-        'learning_rate': 0.001,
+        'learning_rate': 0.005,
         # number of different tasks
         'n_tasks': 6,
         # number of features
@@ -67,6 +67,7 @@ def get_default_hp():
 
 
 def get_loss_weights(hp, Y):
+    # cost masks
     loss_weights = {}
 
     n_input = 1 + hp['n_tasks'] + hp['n_in_features'] + hp['n_in_ring']
@@ -74,36 +75,14 @@ def get_loss_weights(hp, Y):
 
     batch_size = hp['batch_size']
     n_steps = hp['n_steps']
-    # n_stim_steps = int(hp['n_steps'] * hp['fix_frac'])
 
-    # # choices made during go time are more important
-    # # out_choice; dims (batch_size, n_steps, n_out_choice)
-    # out_choice = torch.ones((batch_size, n_steps, hp['n_out_choice']))
-    # out_choice[:,n_stim_steps:,:] = 2
-    # out_choice[:,n_stim_steps:n_stim_steps+hp['choice_delay'],:] = 0
-    # loss_weights['out_choice'] = out_choice
-
-    # # out_fix; dims (batch_size, n_steps, 1)
-    # out_fix = torch.ones((batch_size, n_steps, 1))
-    # out_fix[:,n_stim_steps:n_stim_steps+hp['choice_delay'],:] = 0
-    # loss_weights['out_fix'] = out_fix
-
-    # # ring choices made during go time are more important
-    # # out_ring; dims (batch_size, n_steps, n_out_ring)
-    # out_ring = torch.ones((batch_size, n_steps, hp['n_out_ring']))
-    # out_ring[:,n_stim_steps:,:] = 2
-    # out_ring[:,n_stim_steps:n_stim_steps+hp['choice_delay'],:] = 0
-    # loss_weights['out_ring'] = out_ring
-
-    # can only fixate on one area at a time
+    # cross entropy loss at every timestep
     out_total = torch.ones((batch_size, n_steps, n_output))
 
     one_weights = torch.ones((batch_size, n_steps))
     zero_locs = torch.max(Y, dim=2)[0] != 0
     loss_weights['one'] = one_weights * zero_locs
-
-
-
+    loss_weights['saccade'] = 1
 
     # L1 loss
     loss_weights['l1'] = 1e-6
@@ -115,6 +94,26 @@ def get_loss_weights(hp, Y):
 
     return loss_weights
 
+def SaccadeLoss(ring_buf=0):
+    # z should be (batch_size, n_steps, n_output)
+    def loss(z):
+        zm = torch.argmax(z, dim=2)
+        # TODO write simpler code using ring buffer sometime
+        # r_start = 1 + hp['n_tasks'] + hp['n_out_choice']
+        # r_end = ring_start + hp['n_out_ring']
+        # if ring_buf > 0:
+        #     dif = torch.abs(zm[i] - zm[i-1])
+        #     n = sum([
+        #         torch.abs(zm[i] - zm[i-1]) > 1 and (
+        #             not_in_ring(zm[i]) or not_in_ring(zm[i-1]) or
+        #             not (torch.abs(zm[i] - zm[i-1]) % hp['n_out_ring'])
+        #             )
+        #         for i in range(1,zm.numel())])
+
+        ns = [zm[:,i] != zm[:,i-1] for i in range(1,zm.size()[1])]
+        total = torch.stack(ns, dim=1).float() / zm.size()[1]
+        return total
+    return loss
 
 def train(
     hp=None,
@@ -139,6 +138,8 @@ def train(
 
     writer = SummaryWriter()
 
+    print(f'Summary writer initialized.')
+
     optimizer = optim.Adam(net.parameters(), lr=hp['learning_rate'])
 
     #n_stim_steps = int(hp['n_steps'] * hp['fix_frac'])
@@ -156,21 +157,22 @@ def train(
     # choice_criterion = nn.BCEWithLogitsLoss(reduction='none')
     # ring_criterion = nn.BCEWithLogitsLoss(reduction='none')
 
+    # weight cost mask not implementable in get_loss_weights
     n_output = 1 + hp['n_out_choice'] + hp['n_out_ring']
     cost_mask = torch.ones(n_output)
     cost_mask[0] = 5
     one_criterion = nn.CrossEntropyLoss(weight=cost_mask, reduction='none')
-
+    saccade_criterion = SaccadeLoss()
     l1_criterion = nn.L1Loss()
 
-    loss_types = ['one', 'l1']
+    loss_types = ['one', 'l1', 'saccade']
 
     losses = []
     losses_weighted = {key:[] for key in loss_types}
 
     print(f'Training a ({rnnt}):\n\t \
         epochs: {hp["n_epochs"]}\n\t \
-        samples: {hp["n_samples"]}\n\t \
+        samples: {len(dl) * hp["batch_size"]}\n\t \
         batch_size: {hp["batch_size"]}\
         ')
 
@@ -197,11 +199,6 @@ def train(
             y_choice = data['y_choice']
             y_ring = data['y_ring']
 
-            # cost masks: dims (batch_size, n_steps, *)
-            mask_fix = data['y_fix']
-            mask_choice = data['y_choice']
-            mask_ring = data['y_ring']
-
 
             
             # X is input to network; dims (batch_size, n_steps, n_input)
@@ -225,24 +222,22 @@ def train(
             Z = torch.cat([fix_outs, choice_outs, ring_outs], dim=2)
             if (Z != Z).any():
                 pdb.set_trace()
-
-            # apply criteria to calculate unweighted losses
-            # losses_unweighted['out_fix'] = fix_criterion(fix_outs, y_fix)
-            # losses_unweighted['out_choice'] = choice_criterion(choice_outs, y_choice)
-            # losses_unweighted['out_ring'] = ring_criterion(ring_outs, y_ring)
-
-
-            loss_weights = get_loss_weights(hp, Y)
-            losses_unweighted['one'] = one_criterion(Z.transpose(1,2), Y_C)
+            
 
             # l1 regularization
             l1 = 0
             for p in net.parameters():
                 l1 += p.abs().sum()
             losses_unweighted['l1'] = l1
+            # cross entropy loss across each timestep
+            losses_unweighted['one'] = one_criterion(Z.transpose(1,2), Y_C)
+            # saccading is expensive
+            losses_unweighted['saccade'] = saccade_criterion(Z)
+            
 
             # weight the losses and sum them to form the actual loss
             loss = 0
+            loss_weights = get_loss_weights(hp, Y)
             for l in loss_types:
                 if losses_unweighted[l].numel() > 0:
                     val = torch.mean(losses_unweighted[l] * loss_weights[l])
@@ -257,23 +252,31 @@ def train(
             loss.backward()
             optimizer.step()
 
-            writer.add_image('X/Y/Z', torch.cat([X,Y,torch.sigmoid(Z)],dim=2)[0,:,:], g_step, dataformats='HW')
-
             # add losses to tensorboard
             for l in loss_types:
                 writer.add_scalar(f'loss_{l}', losses_weighted[l][-1], g_step)
             writer.add_scalar('total loss', loss, g_step)
 
-            if g_step % 50 == 0:
+            if g_step % 200 == 0:
                 # add weights to tensorboard
                 for k,v in net.state_dict().items():
                     if v.numel() != 0:
                         writer.add_histogram(k, v, g_step)
                 # add simple visualization to tensorboard
-                writer.add_image('X/Y/Z', torch.cat([X,Y,torch.sigmoid(Z)],dim=2)[0,:,:], g_step, dataformats='HW')
+                vs = [v[0].detach().numpy() for v in [X,Y,Z]]
+                vs[0] = vs[0].clip(0,1)
+                vs[1] = vs[1].clip(0,1)
+                vs[2] = sps.softmax(vs[2],axis=1)
+                vs_np = [(255 * v).astype(np.uint8) for v in vs]
+                fig, ax = plt.subplots(nrows=1,ncols=3)
+                for v in range(3):
+                    img = Image.fromarray(vs_np[v])
+                    ax[v].imshow(img, cmap='gray')
+                    ax[v].set_title(f'{v+1}')
+                writer.add_figure('X, Y, Z', fig, g_step)
 
         avg_loss = np.mean(np.array(losses[-80:]))
-        print(f'Epoch {epoch} completed. Loss: {avg_loss}')
+        print(f'Epoch {epoch+1} completed. Loss: {avg_loss}')
         if epoch % 2 == 0 and program_mode != 'debug' and run_path is not None:
             # save checkpoint
             ckpt_path = os.path.join(run_path, str(g_step)+'.pth')
@@ -299,7 +302,7 @@ if __name__ == '__main__':
     cur_time = time.ctime().replace(' ', '_')
     run_path = os.path.join('models', cur_time)
 
-    data_path='data/Wed_Nov_27_00:22:42_2019/average_ring.pkl'
+    data_path='data/Thu_Nov_28_00:50:15_2019/match_ring+average_ring.pkl'
     model_path=None #'models/Tue_Nov_26_00:31:21_2019/7000.tar'
 
     if program_mode == 'train':

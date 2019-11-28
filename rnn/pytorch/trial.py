@@ -91,7 +91,7 @@ class Trial:
 
     # create a vector that stores gaussian-distributed values for use in rings
     def get_ring_vec(self, n_units, ang, gamma, var):
-        v = np.empty((n_units))
+        v = np.zeros((n_units))
         for u in range(n_units):
             u_dist = np.abs(ang - angle(n_units, u)) % (2 * np.pi)
             u_min_dist = np.minimum(u_dist, 2*np.pi - u_dist)
@@ -121,115 +121,15 @@ class Trial:
         return trial_data
 
 
-class Trial2:
-    def __init__(self, hp, n_trials=100):
-        self.n_trials = n_trials
-        self.n_steps = hp['n_steps']
-        self.n_tasks = hp['n_tasks']
-        self.n_in_feats = hp['n_in_features']
-        self.n_in_ring = hp['n_in_ring']
-        self.n_out_choice = hp['n_out_choice']
-        self.n_out_ring = hp['n_out_ring']
-
-        self.sigma_x = hp['sigma_x']
-        self.stim_sigma = hp['stim_sigma']
-
-        self.n_stim_steps = int(hp['n_steps'] * hp['fix_frac'])
-
-        # fixation stimulus is always 1 for stimulus steps, then 0
-        self.x_fix = np.concatenate([
-                np.ones([self.n_trials, self.n_stim_steps, 1]),
-                np.zeros([self.n_trials, self.n_steps - self.n_stim_steps, 1])
-                ], axis=1
-            )
-
-        self.y_fix = np.concatenate([
-                np.ones([self.n_trials, self.n_stim_steps, 1]),
-                np.zeros([self.n_trials, self.n_steps - self.n_stim_steps, 1])
-                ], axis=1
-            )
-
-        # identify task through task id later
-        self.x_task = np.zeros([self.n_trials, self.n_steps, self.n_tasks])
-
-        # placeholder
-        self.x_ring = np.zeros([self.n_trials, self.n_steps, self.n_in_ring])
-
-        # placeholder
-        self.x_feats = np.zeros([self.n_trials, self.n_steps, self.n_in_feats])
-
-        # placeholder
-        self.y_choice = np.zeros([self.n_trials, self.n_steps, self.n_out_choice])
-
-        # placeholder
-        self.y_ring = np.zeros([self.n_trials, self.n_steps, self.n_out_ring])
-    
-
-    # helper function to replace None values in indices list with default values
-    def _get_indices(self, ix):
-        # indices 0 and 1 are trials start and stop points
-        # indices 2 and 3 are step start and stop points
-        if ix[0] is None:
-            ix[0] = 0
-        if ix[1] is None:
-            ix[1] = self.n_trials
-        if ix[2] is None:
-            ix[2] = 0
-        if ix[3] is None:
-            ix[3] = self.n_steps
-        return ix
-
-    # replace input/output values for ring and features
-    def put(self, section, mode, ix=[None,None,None,None], vals=None):
-        if section == 'task':
-            arr = self.x_task
-        elif section == 'in_fix':
-            arr = self.x_fix
-        elif section == 'in_ring':
-            arr = self.x_ring
-        elif section == 'in_feats':
-            arr = self.x_feats
-        elif section == 'out_fix':
-            arr = self.y_fix
-        elif section == 'out_choice':
-            arr = self.y_choice
-        elif section == 'out_ring':
-            arr = self.y_ring
-
-        ix = self._get_indices(ix)
-        arr_ind = arr[ix[0]:ix[1],ix[2]:ix[3],:]
-
-        if mode == 'vals':
-            shp = arr_ind.shape
-            arr[ix[0]:ix[1],ix[2]:ix[3],:] = np.tile(np.copy(vals),(shp[0],shp[1],1))
-        elif mode == 'ring_loc':
-            ang, gamma, var = vals
-            n_units = self.n_in_ring if section == 'in_ring' else self.n_out_ring
-            for u in range(n_units):
-                u_dist = np.abs(ang - angle(n_units, u)) % (2 * np.pi)
-                u_min_dist = np.minimum(u_dist, 2*np.pi - u_dist)
-                u_val = gamma * 0.8 * np.exp(-1/2 * np.square(8/np.pi * u_min_dist) / var)
-                arr_ind[:,:,u] += u_val
-
-    # add some noise to the input
-    def add_x_noise(self):
-        x_list = [self.x_fix, self.x_task, self.x_ring, self.x_feats]
-        for x in x_list:
-            x += np.random.randn(x.shape) * self.sigma_x
-
-    def get_trial_data(self):
-        self.add_x_noise()
-        return [self.x_fix, self.x_task, self.x_ring, self.x_feats, self.y_fix, self.y_choice, self.y_ring]
-
-
 
 class TrialData(Dataset):
     def __init__(self, trials):
         xy = [[] for i in range(7)]
-        for trial in trials:
-            trial_xy = trial.get_trial_data()
-            for i, z in enumerate(trial_xy):
-                xy[i].append(z)
+        for trial_set in trials:
+            for trial in trial_set:
+                trial_xy = trial.get_trial_data()
+                for i, z in enumerate(trial_xy):
+                    xy[i].append(z)
 
         # concatenate along n_trials dimension
         self.xy = [torch.from_numpy(

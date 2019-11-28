@@ -48,22 +48,24 @@ def get_data_loader(hp, data_path=None):
 
 
 def create_dataset(hp, dir_path=None):
-    samples = hp['n_samples']
     print('Creating dataset...')
+
+    trials = []
 
     # list the trials you want to do here
     #trial = make_delay_match_trial(hp, samples)
-    #trials = match_ring_task(hp, conds=1000, reps=10)
-    trials = average_ring_task(hp, conds=2000, reps=5)
+    trials.append(match_ring_task(hp, conds=1000, reps=10))
+    trials.append(average_ring_task(hp, conds=2000, reps=5))
 
     td = TrialData(trials)
 
     print('Dataset created.')
 
     if dir_path is not None:
-        with open(os.path.join(dir_path, 'average_ring.pkl'), 'wb') as f:
+        data_path = os.path.join(dir_path, 'match_ring+average_ring.pkl')
+        with open(data_path, 'wb') as f:
             pickle.dump(td, f)
-            print(f'Dataset saved to {dir_path}')
+            print(f'Dataset saved to {data_path}')
 
     return td
 
