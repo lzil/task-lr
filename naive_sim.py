@@ -3,160 +3,170 @@ import pdb
 import os
 import matplotlib.pyplot as plt
 
-
-from task_lr import *
-record_interval = 100
-record_interval = 1
-num_reps = 20
-
-gamma = 1#.7
+# number of samples for MSE calculation
+n_mse_reps = 10
 
 
-def single_trial(N, q, lr, mask=0, clip=False, iters=50000):
-    # quantifying dimensionality prior relevance
-    dims = range(N)
-    dims_p = [1] * N
+# no correlations; good lr choices; lr must be <2/N
+lr_list = {
+    10: [0.05, 0.1, 0.16, 0.2, 0.21], # 0.2
+    20: [0.095, 0.098, 0.1, 0.1001], # 0.1
+    50: [0.01, 0.02, 0.03, 0.036, 0.039, 0.04, 0.0403], # 0.04
+    100: [0.001, 0.01, 0.015, 0.019, 0.02, 0.021], # 0.02
+    200: [0.001, 0.005, 0.009, 0.01, 0.0101, 0.011], # 0.01
+    400: [0.001, 0.004, 0.0049, 0.005, 0.0051, 0.006] # 0.005
+}
+
+# give back a binary sample s with n dimensions
+def sample_s(n):
+    return 2 * np.random.randint(0, 2, size=n) - 1
+
+
+def single_trial(N, q, lr, gamma=1, m=1, clip=False, s_corr=1, iters=50000, rec_int=1000):
+    """train a single trial with a single parameter setting
+    
+    Args:
+        N (TYPE): number of dimensions
+        q (float): (0,1); proportion of dims that are relevant
+        lr (float): (0,1); learning rate
+        gamma (int, optional): decay rate of prior
+        m (float, optional): proportion of dims to pay attention to
+        clip (bool, optional): whether to clip weights after every step
+        iters (int, optional): how many iterations to run for
+    """
+
+    # quantifying dimensionality prior relevance, as well as for attention masking
+    # falls off as [1, gamma, gamma^2, ...]
+    dims = np.arange(N)
+    dims_p = np.ones(N)
     for i in range(1,N):
         dims_p[i] = dims_p[i-1]*gamma
-    dims_p = list(map(lambda x: x / sum(dims_p), dims_p))
-    # choose dimensions that are actually relevant and create true weight (binary)
+    dims_p /= np.sum(dims_p)
 
-    # n dimensions are relevant
-    # relevant_dims = np.random.choice(N, n, replace=False)
-    # w_star = np.zeros(N)
-    # for d in relevant_dims:
-    #     w_star[d] = 1
 
-    # each dimension is relevant with probability q
-    # w_star = np.random.choice(2, N, replace=True, p=[1-q,q])
+    # each dimension is relevant with prior distribution given by dims_p
+    n_rel_dims = round(q * N)
+    rel_dims = np.random.choice(dims, size=n_rel_dims, p=dims_p)
 
-    # each dimension is relevant with prior distro
-    num_relevant_dims = round(q * N)
-    relevant_dims = np.random.choice(dims, size=num_relevant_dims, p=dims_p)
+    # defining the optimal w
     w_star = np.zeros(N)
-    for d in relevant_dims:
+    for d in rel_dims:
         w_star[d] = 1
 
-    # iterate with simple learning rule
-    def step(c, w):
-        s_trial = sample_s(N)
-
-        # masking
-        if mask is not 0:
-            p_mask = mask
-
-            # certain probability of masked dimensions
-            # z_mask = np.random.choice(2, N, replace=True, p=[p_mask,1-p_mask])
-
-            # n_mask masked dimensions
-            # n_mask = round(p_mask * N)
-            # relevant_dims = np.random.choice(N, n_mask, replace=False)
-            # z_mask = np.ones(N)
-            # for d in relevant_dims:
-            #    z_mask[d] = 0
-
-            # prior probability distro over relevant dims
-            n_mask = round(p_mask * N)
-            relevant_dims = np.random.choice(dims, size=n_mask, p=dims_p)
-            z_mask = np.ones(N)
-            for d in relevant_dims:
-                z_mask[d] = 0
+    # iterate with simple hebbian learning rule
+    def step(w, s_prev):
+        if s_corr != 0:
+            n_change = round((1 - s_corr) / 2 * N)
+            dims_to_flip = np.random.choice(dims, size=n_change)
+            s_trial = s_prev
+            s_trial[dims_to_flip] *= -1
         else:
-            z_mask = np.ones(N)
+            s_trial = sample_s(N)
 
-        
+        # pay attention to m proportion of dimensions
+        # dimensionality also falls as a function of gamma
+        z_att = np.ones(N)
+        if m < 1:
+            n_att = round(m * N)
+            att_dims = np.random.choice(dims, size=n_att, p=dims_p)
+            for d in att_dims:
+                z_att[d] = 0
 
+        # actual hebbian learning rule
         r_diff = (w_star - w) @ s_trial
 
-        se = 1/N * np.linalg.norm(r_diff) ** 2
-        w_delta = lr * r_diff * z_mask * s_trial
-
+        w_delta = lr * r_diff * z_att * s_trial
         w_new = w + w_delta
 
+        # mse calculation
+        se = 1/N * np.linalg.norm(r_diff) ** 2
+
+        # clip w if it's over 1. hasn't been used in a while
         if clip:
             w_cur = np.clip(w_cur, 0, 1)
 
-        # if not c % 1000 and c > 0:
-        #     print('Iteration {}: mse: {}'.format(c, mse))
-        return w_new, se
+        return s_trial, w_new, se
 
 
-    def train():
-        w_cur = np.zeros(N)
-        mse_arr = []
-        print('Running: {} units learning stimuli with p={}, lr={}'.format(N, q, lr))
-        for c in range(iters):
-            if not c % record_interval:
-                mse = 0
-                for i in range(num_reps):
-                    w_new, se = step(c, w_cur)
-                    mse += se
-                mse /= num_reps
-                mse_arr.append(mse)
-                w_cur = w_new
-            else:
-                w_cur, _ = step(c, w_cur)
+    w_cur = np.zeros(N)
+    mse_arr = []
+    print(f'Running: {N} units learning stimuli with q={q}, lr={lr}')
+    for c in range(iters):
+        s = sample_s(N)
+        if not c % rec_int:
+            # run for some number of timesteps each to get a good MSE estimate
+            # then take the last step, whichever it is
+            # but ONLY on recorded steps
+            mse = 0
+            for i in range(n_mse_reps):
+                s, w_new, se = step(w_cur,s)
+                mse += se
+            mse /= n_mse_reps
+            mse_arr.append(mse)
+            w_cur = w_new
+        else:
+            s, w_cur, _ = step(w_cur,s)
 
-        return mse_arr
-
-
-    return train()
-
-    # print('final w: {}'.format(w_cur))
+    return mse_arr
 
 
-mse_ideal_len = 4
+if __name__ == '__main__':
+    
 
-lr_list = {
-    10: [0.05, 0.1, 0.16, 0.2, 0.21],
-    20: [0.095, 0.098, 0.1, 0.1001],
-    50: [0.01, 0.02, 0.03, 0.036, 0.039, 0.04, 0.0403],
-    100: [0.001, 0.01, 0.015, 0.019, 0.02, 0.021],
-    200: [0.001, 0.005, 0.009, 0.01, 0.0101, 0.011],
-    400: [0.001, 0.004, 0.0049, 0.005, 0.0051, 0.006]
-}
+    # mse_ideal_len = 4
 
-Ns = [10]
-q = 0.2
+    q = 0.2
+    gamma = 1
+    n_iters = 20000
+    rec_int = 100
 
-iterations = 50
+    Ns = [50,100, 200]
 
-for N in Ns:
-    mse_range = []
-    mse_range_ideal = []
-    for lr in lr_list[N]:
-        for m in [0]:
-            mses = single_trial(N, q, lr, mask=m, iters=iterations)
-            mse_range.append(mses)
+    ms = [1]
 
-            # mses_ideal = np.zeros(mse_ideal_len)
-            # mses_ideal[0] = 1
-            # lr_ideal = (1 - 2*lr + N*(lr**2)) ** 1000
-            # for i in range(mse_ideal_len - 1):
-            #     mses_ideal[i + 1] = mses_ideal[i] * lr_ideal
-            # mse_range_ideal.append(mses_ideal)
-            prefactor = np.log(1 - 2*lr + N*(lr**2))
-            mses_ideal = record_interval * prefactor * np.arange(mse_ideal_len)
-            mse_range_ideal.append(mses_ideal)
+    # mse_actual contains real MSEs from training
+    mse_actual = {}
+    # mse_theory contains theoretical learning rate bound MSEs
+    mse_theory = {}
 
+    for N in Ns:
+        mse_actual[N] = {}
+        mse_theory[N] = {}
+        for m in ms:
+            mse_actual[N][m] = []
+            mse_theory[N][m] = []
+            for lr in lr_list[N]:
+                # actually acquire MSEs
+                mses = single_trial(N, q, lr, gamma=gamma, iters=n_iters, s_corr=1, rec_int=rec_int)
+                mse_actual[N][m].append(mses)
 
-    mse_range = np.log(np.asarray(mse_range))
-    mse_range_ideal = np.asarray(mse_range_ideal)
+                # theoretical learning rate bound for no correlations
+                prefactor = np.log(1 - 2*lr + N*(lr**2))
+                mses_ideal = np.log(q) + rec_int * prefactor * np.arange(len(mses))
+                mse_theory[N][m].append(mses_ideal)
+
+            # convert to np arrays; log already taken in prefactor for theory
+            mse_actual[N][m] = np.log(np.asarray(mse_actual[N][m]))
+            mse_theory[N][m] = np.asarray(mse_theory[N][m])
 
     cmap = plt.get_cmap('jet_r')
 
-    for i,lr in enumerate(mse_range):
-        color = cmap(float(i)/len(lr_list[N]))
-        plt.plot(lr, c=color,label=lr_list[N][i])
-        plt.plot(mse_range_ideal[i], c=color, ls='--')
+    fig,ax = plt.subplots(nrows=len(ms),ncols=len(Ns),squeeze=False)
+    for i, N in enumerate(Ns):
+        for j, m in enumerate(ms):
+            for k,lr in enumerate(mse_actual[N][m]):
+                color = cmap(float(k)/len(lr_list[N]))
+                ax[j,i].plot(lr, c=color,label=lr_list[N][k])
+                ax[j,i].plot(mse_theory[N][m][k], c=color, ls='--', linewidth=1)
 
-    plt.title('learning rate vs MSEs for N={},p={},m=0.2'.format(N,q))
-    plt.xlabel('iteration (x{})'.format(record_interval))
-    plt.ylabel('log MSE')
-    plt.legend()
-    plt.show()
+                ax[j,i].set_title(f'N={N}, m={m}')
+                ax[j,i].set_xlabel(f'iter (x{rec_int})')
+                ax[j,i].set_ylabel('log MSE')
+                ax[j,i].legend()
 
-    save_path = os.path.join('figures', N, f'naive_sim_{N}_{q}')
+    plt.savefig('playground/test.png')
+
+    #save_path = os.path.join('figures', N, f'naive_sim_{N}_{q}')
     #plt.savefig('naive_sim_{}_{}_{}.png'.format(N,q,0.2))
     #plt.clf()
 

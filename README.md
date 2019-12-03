@@ -1,8 +1,13 @@
 
+# task-lr
 
-# TODO
+## general idea
+let's study how learning rates vary for simple tasks.
 
-## RNN
+## TODO
+
+
+### RNN
 
 - implement more tasks
 - write tests in code
@@ -10,7 +15,7 @@
 - better documentation for some files
 
 
-## Done
+### Done
 
 - implement rings
 - use more general stimulus/response representations
