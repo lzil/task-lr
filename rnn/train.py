@@ -17,7 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 import time
 
-sys.path.insert(1, '../../')
+sys.path.insert(1, '../')
 
 from network import *
 from trial import *

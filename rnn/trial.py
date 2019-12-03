@@ -60,8 +60,7 @@ class Trial:
 
     # helper function to replace None values in indices list with default values
     def _get_indices(self, ix):
-        # indices 0 and 1 are trials start and stop points
-        # indices 2 and 3 are step start and stop points
+        # indices are step start and stop points
         if ix[0] is None:
             ix[0] = 0
         if ix[1] is None:
@@ -80,12 +79,10 @@ class Trial:
         else:
             ix = self._get_indices(ix)
             val_resized = np.tile(np.copy(vals), (ix[1] - ix[0], 1))
-
             # val_resized should be (n_steps, *) shape
             if mode == 'write':
                 arr[ix[0]:ix[1],:] = val_resized
             elif mode == 'append':
-                # should only be used on inputs for now; i.e. section == 'x'
                 arr[ix[0]:ix[1],:] += val_resized
 
 
@@ -192,6 +189,9 @@ def get_fix_start_ends(hp, conds):
 #         task.put('out_choice', 'vals', ix=[rn[i],rn[i+1],task.n_stim_steps,None], vals=v_choice)
 
 #     return task
+
+def do_nothing(hp, conds, reps):
+    pass
 
 
 def match_ring_task(hp, conds, reps):

@@ -1,7 +1,11 @@
-figures/
-gamma_graphs/
+playground/
 runs/
 models/
 data/
 
-**__pycache__/
+__pycache__
+
+ibl/hoferlab
+
+
+*.ipynb_checkpoints
