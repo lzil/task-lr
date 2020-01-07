@@ -11,7 +11,8 @@ let's study how learning rates vary for simple tasks.
 
 - implement more tasks
 - write tests in code
-- dataset saving / loading, model saving / loading interface (argparse)
+- implement more biological learning rules
+- dataset saving / loading, model saving / loading interface (argparse or gflags, etc)
 - better documentation for some files
 
 

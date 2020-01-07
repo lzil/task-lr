@@ -83,7 +83,7 @@ def single_trial(N, q, lr, gamma=1, m=1, clip=False, s_corr=1, iters=50000, rec_
 
         # clip w if it's over 1. hasn't been used in a while
         if clip:
-            w_cur = np.clip(w_cur, 0, 1)
+            w_new = np.clip(w_new, 0, 1)
 
         return s_trial, w_new, se
 
