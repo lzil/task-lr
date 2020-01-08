@@ -16,6 +16,10 @@ from ibllib.misc import pprint
 import numpy as np
 import matplotlib.pyplot as plt
 
+import pdb
+
+eps = 1e-6
+
 
 DEFAULT_D_TYPES = [
     'trials.choice',
@@ -34,6 +38,10 @@ class SessionData():
         self.feedback = data['trials.feedbackType']
         self.choice = data['trials.choice']
         self.included = data['trials.included']
+
+
+def generate_acc(size, acc):
+    ...
 
 
 # return counts for each of the subjects
@@ -95,11 +103,11 @@ def get_session_feedback(dt, idx=None):
         cxcs_cut = cxcs[dt.included * (1 - zero_contrasts) > 0]
 
         # make sure feedback is 1 if choice is correct, and vice versa
-        assert np.count_nonzero(np.sign(cxcs_cut * feedback_cut) - 1) == 0
+        assert np.count_nonzero(np.sign((cxcs_cut-eps) * feedback_cut) - 1) == 0
 
     except TypeError as e:
         if idx is not None:
-            print('eid {idx}: skipping, error happened:')
+            print(f'eid {idx}: skipping, error happened:')
         else:
             print('skipping, error happened:')
         print(repr(e))
@@ -114,7 +122,7 @@ def get_zero_counts(cxcs_cut):
 
 
 # just get the overall performance per eid for given list of eids
-def all_perfs(eids, sinfos, zeros=True):
+def get_perf(eids, sinfos):
 
     outs = []
     for i,eid in enumerate(eids):
@@ -126,119 +134,107 @@ def all_perfs(eids, sinfos, zeros=True):
         cxcs, feedback = tmp
         perf = np.sum(feedback == 1) / feedback.size
         
-        if zeros:
-            zeros = get_zero_counts(cxcs)
-            outs.append((i, eid, perf, zeros))
-            print(f'eid {i}: {eid}, perf: {perf}, zeros: {zeros}')
-        else:
-            outs.append((i, eid, perf))
-            print(f'eid {i}: {eid}, perf: {perf}')
-
-    return outs
-
-
-
-# get windowed performance within for a particular set of sessions (25)
-def sess_window_perfs(eids, sinfos, window):
-    min_len = 250
-
-    outs = []
-    good_eids=0
-
-    for i,eid in enumerate(eids):
-
-        data = load_data(eid)
-        tmp = get_session_feedback(data, idx=i)
-        if type(tmp) == TypeError:
-            continue
-        cxcs, feedback = tmp
-
-        feedback = (feedback + 1) / 2
-
-        if feedback.size < min_len:
-            continue
-
-        perfs = []
-
-        running_perf = sum(feedback[:window]) / window
-        for j in range(window, min_len):
-            running_perf += (feedback[j] - feedback[j - window]) / window
-            perfs.append(running_perf)
-
-        outs.append((i, eid, perfs))
-        good_eids += 1
-        if good_eids >= 25:
-            break
+        zeros = get_zero_counts(cxcs)
+        outs.append((i, eid, perf, zeros))
+        print(f'eid {i}: {eid}, perf: {perf}, zeros: {zeros}')
 
     return outs
 
 
 # get windowed performance across all sessions
-def all_window_perfs(eids, sinfos, window=10):
+def all_window_perfs(eids, sinfos, window=20):
     min_len = window + 1
 
     outs = []
-
     for i,eid in enumerate(eids):
-
         data = load_data(eid)
         tmp = get_session_feedback(data, idx=i)
         if type(tmp) == TypeError:
             continue
         cxcs, feedback = tmp
 
-        feedback = (feedback + 1) / 2
-
         if feedback.size < min_len:
             continue
 
-        perfs = []
+        feedback = (feedback + 1) / 2
 
+
+        perfs = []
+        # initial windowed performance
         running_perf = sum(feedback[:window]) / window
         for j in range(window, feedback.size):
             running_perf += (feedback[j] - feedback[j - window]) / window
             perfs.append(running_perf)
 
         outs.append((i, eid, perfs))
-
+        print(f'Finished eid {i}: {eid}')
 
     return outs
 
-def all_seq_stats(eids, sinfos):
-    for i,eid in enumerate(eids):
+# get smoothed performance across all sessions
+def all_smoothed_perfs(eids, sinfos, a=0.5, fil=None):
+    if fil is None:
+        x = (1 - a) / (1 + a) # did a bunch of math on the whiteboard to figure this out
+        fil_len = 111
+        fil_cen = int((fil_len - 1) / 2)
+        fil = np.ones((fil_len))
+        fil[fil_cen] = x
+        for i in range(fil_cen):
+            fil[fil_cen-1-i] = fil[fil_cen-i] * a
+            fil[fil_cen+1+i] = fil[fil_cen+i] * a
+    else:
+        assert abs(sum(fil) - 1) < eps
+        fil_len = len(fil)
 
+    outs = []
+    for i,eid in enumerate(eids):
         data = load_data(eid)
         tmp = get_session_feedback(data, idx=i)
         if type(tmp) == TypeError:
             continue
         cxcs, feedback = tmp
 
-        feedback = (feedback + 1) / 2
-
-        if feedback_cut.size < 250:
+        if feedback.size < fil_len * 2:
             continue
 
+        feedback = (feedback + 1) / 2
 
-        perfs = []
+        smoothed = np.convolve(feedback, fil, mode='valid')
 
-        counts = np.zeros(15)
-        cur_combo = 0
-        cur_val = -1
-        for j in range(feedback_cut.size):
-            if feedback_cut[j] == cur_val:
-                cur_combo += 1
-            else:
-                cur_val = feedback_cut[j]
-                if cur_combo > counts.size:
-                    print(f'Warning, combo size {cur_combo} but only {counts.size} elements in counts.')
-                    cur_combo = counts.size
-                counts[cur_combo - 1] += 1
-                cur_combo = 1
+        outs.append((i, eid, smoothed))
+        print(f'Finished eid {i}: {eid}')
 
-
-        outs.append((i, eid, counts))
 
     return outs
+
+# def all_seq_stats(eids, sinfos):
+#     for i,eid in enumerate(eids):
+#         data = load_data(eid)
+#         tmp = get_session_feedback(data, idx=i)
+#         if type(tmp) == TypeError:
+#             continue
+#         cxcs, feedback = tmp
+
+#         perfs = []
+
+#         counts = np.zeros(15)
+#         cur_combo = 0
+#         cur_val = -1
+#         for j in range(feedback_cut.size):
+#             if feedback_cut[j] == cur_val:
+#                 cur_combo += 1
+#             else:
+#                 cur_val = feedback_cut[j]
+#                 if cur_combo > counts.size:
+#                     print(f'Warning, combo size {cur_combo} but only {counts.size} elements in counts.')
+#                     cur_combo = counts.size
+#                 counts[cur_combo - 1] += 1
+#                 cur_combo = 1
+
+
+#         outs.append((i, eid, counts))
+
+#     return outs
 
 
 # def calc_seq_stats(eids, sinfos):
@@ -291,51 +287,55 @@ if __name__ == '__main__':
 
     lab = 'hoferlab'
     cache = 'cache'
+    figures = 'figures'
 
 
-    setting = "sess_perfs"
+    setting = "all_smoothed_perfs"
 
-    if setting == 'windowed_perfs':
-        subject = 'SWC_001'
-        f_prefix = os.path.join(cache, f'{lab}-{subject}')
+    # if setting == 'windowed_perfs':
+    #     subject = 'SWC_001'
+    #     c_prefix = os.path.join(cache, f'{lab}-{subject}')
 
-        eids, sinfos = one.search(lab=lab, details=True, subject=subject)
-        eids, sinfos = order_eids(eids, sinfos)
+    #     eids, sinfos = one.search(lab=lab, details=True, subject=subject)
+    #     eids, sinfos = order_eids(eids, sinfos)
 
-        outs = sess_window_perfs(eids, sinfos)
-        rows = 5
-        cols = 5
-        fig, ax = plt.subplots(nrows=rows, ncols=cols, sharey=True, squeeze=True)
-        for r in range(rows):
-            for c in range(cols):
-                ax[r, c].plot(outs[rows*r+c][2])
-                ax[r, c].set_title(outs[rows*r+c][0])
-                ax[r, c].set_ylim([0, 1])
+    #     outs = sess_window_perfs(eids, sinfos)
+    #     rows = 5
+    #     cols = 5
+    #     fig, ax = plt.subplots(nrows=rows, ncols=cols, sharey=True, squeeze=True)
+    #     for r in range(rows):
+    #         for c in range(cols):
+    #             ax[r, c].plot(outs[rows*r+c][2])
+    #             ax[r, c].set_title(outs[rows*r+c][0])
+    #             ax[r, c].set_ylim([0, 1])
 
-        plt.gcf()
-        plt.show()
+    #     plt.gcf()
+    #     plt.show()
 
-    elif setting == 'all_window_perfs':
+    if setting == 'all_window_perfs':
+
+        window = 10
         # use all subjects for one lab
         eids, sinfos = one.search(lab=lab, details=True)
-        subjects = get_subject_counts(sinfos)[:1]
+        subjects = get_subject_counts(sinfos)[:6]
         subjects, counts = zip(*subjects)
 
         perf_outs = []
-        fig, ax = plt.subplots(nrows=1, ncols=1, sharey=True, squeeze=False)
+        fig, ax = plt.subplots(nrows=6, ncols=1, sharey=True, squeeze=False, figsize=(20,12))
 
         for ind, subject in enumerate(subjects):
             print(f'Starting on subject: {subject}')
-            f_prefix = os.path.join(cache, f'{lab}-{subject}')
+            c_prefix = f'{cache}/{lab}-{subject}'
+            
 
             eids, sinfos = one.search(lab=lab, details=True, subject=subject)
             eids, sinfos = order_eids(eids, sinfos)
         
             # if performances are already done no point recomputing
-            f_name = f_prefix + '-window.pkl'
+            f_name = f'{c_prefix}-window-{window}.pkl'
             if not os.path.isfile(f_name):
                 print("Stored file doesn't exist; downloading and calculating.")
-                outs = all_window_perfs(eids, sinfos, window=40)
+                outs = all_window_perfs(eids, sinfos, window=window)
                 with open(f_name, 'wb') as f:
                     pkl.dump(outs, f)
             else:
@@ -352,41 +352,47 @@ if __name__ == '__main__':
                 perf_long += k
                 perf_lens.append(len(perf_long))
             
-            row, col = divmod(ind, 3)
-            ax[row, col].plot(perf_long)
-            ax[row, col].set_ylim([0, 1])
-            ax[row, col].set_title(subject)
-
-            ax[row, col].vlines(perf_lens, ymin=0, ymax=1, linestyles='dashed')
+            row, col = divmod(ind, 1)
+            ax[row,col].plot(perf_long, lw=0.5)
+            ax[row,col].set_ylim([0, 1])
+            ax[row,col].set_title(subject)
+            ax[row,col].vlines(perf_lens, ymin=0, ymax=1, linestyles='dashed')
+            ax[row,col].set_xlim([0,None])
 
         # plot all the subjects in different plots
         # inds, eids, perfs = list(zip(*outs))
+        f_prefix = f'{figures}/{lab}'
         plt.gcf()
-        plt.savefig(f'{lab}-window.jpg', dpi=500)
+        plt.savefig(f'{f_prefix}-window-{window}.jpg', dpi=500)
         plt.show()
 
+    if setting == 'all_smoothed_perfs':
 
-    elif setting == 'all_perfs':
+        a = 0.95
+        a = 'custom'
+        fil = np.asarray([1/6, 1/3, 1/3, 1/6])
 
-        # get all subjects with at least 15 sessions
-        subjects = get_subject_counts(sinfos)
-        subjects, counts = zip(*subjects[:6])
+        # use all subjects for one lab
+        eids, sinfos = one.search(lab=lab, details=True)
+        subjects = get_subject_counts(sinfos)[:1]
+        subjects, counts = zip(*subjects)
 
         perf_outs = []
-        fig, ax = plt.subplots(nrows=2, ncols=3, sharey=True)
+        fig, ax = plt.subplots(nrows=1, ncols=1, sharey=True, squeeze=False, figsize=(20,12))
 
         for ind, subject in enumerate(subjects):
             print(f'Starting on subject: {subject}')
-            f_prefix = os.path.join(cache, f'{lab}-{subject}')
+            c_prefix = f'{cache}/{lab}-{subject}'
+            
 
             eids, sinfos = one.search(lab=lab, details=True, subject=subject)
             eids, sinfos = order_eids(eids, sinfos)
         
             # if performances are already done no point recomputing
-            f_name = f_prefix + '-perf.pkl'
+            f_name = f'{c_prefix}-smoothed-{a}.pkl'
             if not os.path.isfile(f_name):
                 print("Stored file doesn't exist; downloading and calculating.")
-                outs = all_perfs(eids, sinfos)
+                outs = all_smoothed_perfs(eids, sinfos, a=a, fil=fil)
                 with open(f_name, 'wb') as f:
                     pkl.dump(outs, f)
             else:
@@ -397,33 +403,91 @@ if __name__ == '__main__':
             perf_outs.append((subject, outs))
 
             inds, eids, perfs = list(zip(*outs))
-            row, col = divmod(ind, 3)
-            ax[row, col].plot(inds, perfs)
-            ax[row, col].set_ylim([0, 1])
-            ax[row, col].set_title(subject)
+            perf_lens = []
+            running_len = 0
+            for k in perfs:
+                running_len += k.size
+                perf_lens.append(running_len)
+
+            perf_long = np.concatenate(perfs, axis=0)
+            
+            row, col = divmod(ind, 1)
+            ax[row,col].plot(perf_long, lw=0.5)
+            ax[row,col].set_ylim([0, 1])
+            ax[row,col].set_title(subject)
+            ax[row,col].vlines(perf_lens, ymin=0, ymax=1, linestyles='dashed')
+            ax[row,col].set_xlim([0,None])
 
         # plot all the subjects in different plots
         # inds, eids, perfs = list(zip(*outs))
+        f_prefix = f'{figures}/{lab}'
         plt.gcf()
-        plt.savefig(f'{lab}-perf.jpg', dpi=500)
+        plt.savefig(f'{f_prefix}-smoothed-{a}.jpg')
         plt.show()
 
-    elif setting == 'sess_perfs':
+
+    if setting == 'all_perfs':
+
+        eids, sinfos = one.search(lab=lab, details=True)
+        subjects = get_subject_counts(sinfos)
+        subjects, counts = zip(*subjects[:6])
+
+        perf_outs = []
+        fig, ax = plt.subplots(nrows=2, ncols=3, sharey=True)
+
+        for ind, subject in enumerate(subjects):
+            print(f'Starting on subject: {subject}')
+            c_prefix = f'{cache}/{lab}-{subject}'
+
+            eids, sinfos = one.search(lab=lab, details=True, subject=subject)
+            eids, sinfos = order_eids(eids, sinfos)
+        
+            # if performances are already done no point recomputing
+            f_name = c_prefix + '-perf.pkl'
+            if not os.path.isfile(f_name):
+                print("Stored file doesn't exist; downloading and calculating.")
+                outs = get_perf(eids, sinfos)
+                with open(f_name, 'wb') as f:
+                    pkl.dump(outs, f)
+            else:
+                print("Stored file exists; loading and moving on to the next subject.")
+                with open(f_name, 'rb') as f:
+                    outs = pkl.load(f)
+
+            perf_outs.append((subject, outs))
+
+            inds, eids, perfs, _ = list(zip(*outs))
+            row, col = divmod(ind, 3)
+            ax[row,col].plot(inds, perfs, 'r.-')
+            ax[row,col].set_ylim([0, 1])
+            ax[row,col].set_title(subject)
+            ax[row,col].grid(b=True, which='major', axis='x')
+            ax[row,col].set_xlabel('session EID')
+            ax[row,col].set_ylabel('session performance')
+
+        # plot all the subjects in different plots
+        # inds, eids, perfs = list(zip(*outs))
+        f_prefix = f'{figures}/{lab}'
+        plt.gcf()
+        plt.savefig(f'{f_prefix}-perf.jpg')
+        plt.show()
+
+    if setting == 'sess_perfs':
 
         # get all subjects with at least 15 sessions
-        subject = 'SWC_015'
+        subject = 'SWC_002'
 
         print(f'Starting on subject: {subject}')
-        f_prefix = os.path.join(cache, f'{lab}-{subject}')
+        c_prefix = f'{cache}/{lab}-{subject}'
 
         eids, sinfos = one.search(lab=lab, details=True, subject=subject)
         eids, sinfos = order_eids(eids, sinfos)
     
         # if performances are already done no point recomputing
-        f_name = f_prefix + '-perf.pkl'
+        f_name = f'{c_prefix}-perf.pkl'
         if not os.path.isfile(f_name):
             print("Stored file doesn't exist; downloading and calculating.")
-            outs = all_perfs(eids, sinfos)
+            outs = get_perf(eids, sinfos)
             with open(f_name, 'wb') as f:
                 pkl.dump(outs, f)
         else:
@@ -441,35 +505,36 @@ if __name__ == '__main__':
         plt.xlabel('session EID')
         plt.ylabel('session performance')
         plt.axis([None,None,0,1])
-        plt.savefig(f'{lab}-perf.jpg', dpi=500)
+        f_prefix = f'{figures}/{lab}-{subject}'
+        plt.savefig(f'{f_prefix}-perf.jpg')
         plt.show()
         
-    elif setting == 'seq_stats':
+    # elif setting == 'seq_stats':
 
-        f_name = f_prefix + '-stats.pkl'
-        if not os.path.isfile(f_name):
+    #     f_name = c_prefix + '-stats.pkl'
+    #     if not os.path.isfile(f_name):
 
-            outs = calc_seq_stats(eids, sinfos)
+    #         outs = calc_seq_stats(eids, sinfos)
 
-            # save the performances
-            with open(f_name, 'wb') as f:
-                pkl.dump(outs, f)
+    #         # save the performances
+    #         with open(f_name, 'wb') as f:
+    #             pkl.dump(outs, f)
 
-        else:
+    #     else:
 
-            with open(f_name, 'rb') as f:
-                outs = pkl.load(f)
+    #         with open(f_name, 'rb') as f:
+    #             outs = pkl.load(f)
 
 
-        rows = 5
-        cols = 5
-        fig, ax = plt.subplots(nrows=rows, ncols=cols, sharey=True, squeeze=True)
-        for r in range(rows):
-            for c in range(cols):
-                ax[r, c].plot(outs[rows*r+c][2])
-                ax[r, c].set_title(outs[rows*r+c][0])
-                ax[r,c].set_xticks(np.arange(16))
-                ax[r,c].grid(b=True, which='major', color='r', alpha=0.5)
+    #     rows = 5
+    #     cols = 5
+    #     fig, ax = plt.subplots(nrows=rows, ncols=cols, sharey=True, squeeze=True)
+    #     for r in range(rows):
+    #         for c in range(cols):
+    #             ax[r, c].plot(outs[rows*r+c][2])
+    #             ax[r, c].set_title(outs[rows*r+c][0])
+    #             ax[r,c].set_xticks(np.arange(16))
+    #             ax[r,c].grid(b=True, which='major', color='r', alpha=0.5)
 
-        plt.gcf()
-        plt.show()
+    #     plt.gcf()
+    #     plt.show()
