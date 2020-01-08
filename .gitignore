@@ -5,8 +5,10 @@ data/
 
 __pycache__
 
-ibl/hoferlab
+ibl/labs
+ibl/cache
 ibl/*.pkl
+*_.*
 
 
 *.ipynb_checkpoints
