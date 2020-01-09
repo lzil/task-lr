@@ -31,15 +31,68 @@ DEFAULT_D_TYPES = [
 ]
 
 class SessionData():
-    def __init__(self, data):
-        self.choice = data['trials.choice']
-        self.contrast_left = data['trials.contrastLeft']
-        self.contrast_right = data['trials.contrastRight']
-        self.feedback = data['trials.feedbackType']
-        self.choice = data['trials.choice']
-        self.included = data['trials.included']
+    def __init__(self, data, err=True):
+        self._choice = data['trials.choice']
+        self._contrast_left = data['trials.contrastLeft']
+        self._contrast_right = data['trials.contrastRight']
+        self._feedback = data['trials.feedbackType']
+        self._included = data['trials.included']
+
+        if err:
+            if self._choice is None:
+                raise KeyError("choice array missing")
+            if self._contrast_left is None or self._contrast_right is None:
+                raise KeyError("contrast array(s) missing")
+            if self._feedback is None:
+                raise KeyError("feedback array missing")
+
+        # turns the contrastLeft and contrastRight into usable np array
+        # contrast is increased by 1 to differentiate positive / negative trials
+        self._contrasts = np.nan_to_num(self._contrast_left) - np.nan_to_num(self._contrast_right)
+        self._contrasts_adj = np.nan_to_num(self._contrast_left + 1) - np.nan_to_num(self._contrast_right + 1)
+        self._zero_contrasts = (self._contrasts == 0) * 1
+        self._cxc = self._contrasts_adj * self._choice
+
+        # create default mask
+        self._mask = self.set_mask(True, True)
+
+        # make sure feedback is 1 if choice is correct, and vice versa
+        assert np.count_nonzero(np.sign((self.cxc-eps) * self.feedback) - 1) == 0
 
 
+    # to mask trials that aren't included and/or trials with zero contrast given
+    def set_mask(self, included, zeros):
+        mask = np.ones_like(self._choice)
+        if included and self._included is not None:
+            mask *= (self._included * 1)
+        if zeros:
+            # zero contrast trials don't count toward actual accuracy
+            mask *= (1 - self._zero_contrasts)
+        self._mask = mask
+
+    @property
+    def choice(self):
+        return self._choice[self._mask == 1]
+    
+    @property
+    def feedback(self):
+        return self._feedback[self._mask == 1]
+
+    @property
+    def cxc(self):
+        # cxcs: contrasts x choice
+        return self._cxc[self._mask == 1]
+
+    @property
+    def contrasts(self):
+        return self._contrasts[self._mask == 1]
+    
+
+    def zero_counts(self):
+        return np.sum(self._zero_contrasts)
+
+    
+    
 def generate_acc(size, acc):
     ...
 
@@ -69,72 +122,41 @@ def order_eids(eids, sinfos):
 
 
 # download and load relevant data
-def load_data(eid, d_types=DEFAULT_D_TYPES, cache_dir='.'):
+def load_data(eid, d_types=DEFAULT_D_TYPES, cache_dir='labs'):
     just_data = one.load(
         eid=eid,
         dataset_types=d_types,
-        cache_dir='labs')
+        cache_dir=cache_dir)
 
     # data in the useful form of type: np array
     data_dict = dict(zip(d_types, just_data))
     sess = SessionData(data_dict)
     return sess
 
-
-# calculate the feedback from trials that matter, return relevant arrays
-def get_session_feedback(dt, idx=None):
-
-    # sometimes some arrays aren't in the data. that's ok, just skip and return the error
-    try:
-        # turns the contrastLeft and contrastRight into usable np array
-        # contrast is increased by 1 to differentiate positive / negative trials
-        contrasts = (np.nan_to_num(dt.contrast_left + 1) - np.nan_to_num(dt.contrast_right + 1))
-        # cxcs: contrasts x choice
-        cxcs = contrasts * dt.choice
-
-        # zero contrast trials don't count toward actual accuracy
-        zero_contrasts = np.abs(contrasts) == 1
-
-        # # if the animal doesn't make a choice then it's wrong
-        # cxcs[cxcs == 0] = -1
-
-        # only include feedback from trials that are both included and have nonzero contrast
-        feedback_cut = dt.feedback[dt.included * (1 - zero_contrasts) > 0]
-        cxcs_cut = cxcs[dt.included * (1 - zero_contrasts) > 0]
-
-        # make sure feedback is 1 if choice is correct, and vice versa
-        assert np.count_nonzero(np.sign((cxcs_cut-eps) * feedback_cut) - 1) == 0
-
-    except TypeError as e:
-        if idx is not None:
-            print(f'eid {idx}: skipping, error happened:')
-        else:
-            print('skipping, error happened:')
-        print(repr(e))
-        return e
-
-    return cxcs_cut, feedback_cut
-
-
-# get number of of zeros made
-def get_zero_counts(cxcs_cut):
-    return sum(cxcs_cut == 0)
+def report_error(e, idx=None):
+    if idx is not None:
+        print(f'eid {idx}: skipping, error happened:')
+    else:
+        print('skipping, error happened:')
+    print(repr(e))
 
 
 # just get the overall performance per eid for given list of eids
-def get_perf(eids, sinfos):
+def get_perfs(eids):
 
     outs = []
     for i,eid in enumerate(eids):
+        
+        try:
+            dt = load_data(eid)
+            feedback = dt.feedback
+            cxc = dt.cxc
+            zeros = dt.zero_counts()
+        except KeyError as e:
+            report_error(e, idx=i)
 
-        data = load_data(eid)
-        tmp = get_session_feedback(data, idx=i)
-        if type(tmp) == TypeError:
-            continue
-        cxcs, feedback = tmp
         perf = np.sum(feedback == 1) / feedback.size
         
-        zeros = get_zero_counts(cxcs)
         outs.append((i, eid, perf, zeros))
         print(f'eid {i}: {eid}, perf: {perf}, zeros: {zeros}')
 
@@ -142,37 +164,38 @@ def get_perf(eids, sinfos):
 
 
 # get windowed performance across all sessions
+# get rid of this eventually as it generalizes to a smoothed perf with a custom window filter
 def all_window_perfs(eids, sinfos, window=20):
-    min_len = window + 1
-
     outs = []
     for i,eid in enumerate(eids):
-        data = load_data(eid)
-        tmp = get_session_feedback(data, idx=i)
-        if type(tmp) == TypeError:
-            continue
-        cxcs, feedback = tmp
+        try:
+            dt = load_data(eid)
+            feedback = dt.feedback
+            cxc = dt.cxc
 
-        if feedback.size < min_len:
-            continue
+            if feedback.size < window + 1:
+                continue
 
-        feedback = (feedback + 1) / 2
+            feedback = (feedback + 1) / 2
 
+            perfs = []
+            # initial windowed performance
+            running_perf = sum(feedback[:window]) / window
+            for j in range(window, feedback.size):
+                running_perf += (feedback[j] - feedback[j - window]) / window
+                perfs.append(running_perf)
 
-        perfs = []
-        # initial windowed performance
-        running_perf = sum(feedback[:window]) / window
-        for j in range(window, feedback.size):
-            running_perf += (feedback[j] - feedback[j - window]) / window
-            perfs.append(running_perf)
+            outs.append((i, eid, perfs))
+            print(f'eid {i}: {eid}')
 
-        outs.append((i, eid, perfs))
-        print(f'Finished eid {i}: {eid}')
+        except KeyError as e:
+            report_error(e, idx=i)
 
     return outs
 
 # get smoothed performance across all sessions
-def all_smoothed_perfs(eids, sinfos, a=0.5, fil=None):
+def all_smoothed_perfs(eids, sinfos, fil=None, a=0.75):
+    # no provided filter
     if fil is None:
         x = (1 - a) / (1 + a) # did a bunch of math on the whiteboard to figure this out
         fil_len = 111
@@ -188,24 +211,44 @@ def all_smoothed_perfs(eids, sinfos, a=0.5, fil=None):
 
     outs = []
     for i,eid in enumerate(eids):
-        data = load_data(eid)
-        tmp = get_session_feedback(data, idx=i)
-        if type(tmp) == TypeError:
-            continue
-        cxcs, feedback = tmp
+        try:
+            dt = load_data(eid)
+            feedback = dt.feedback
+            cxc = dt.cxc
 
-        if feedback.size < fil_len * 2:
-            continue
+            if feedback.size < fil_len * 2:
+                continue
 
-        feedback = (feedback + 1) / 2
+            feedback = (feedback + 1) / 2
 
-        smoothed = np.convolve(feedback, fil, mode='valid')
+            smooth = np.convolve(feedback, fil, mode='valid')
 
-        outs.append((i, eid, smoothed))
-        print(f'Finished eid {i}: {eid}')
+            outs.append((i, eid, smooth))
+            print(f'eid {i}: {eid}')
 
+        except KeyError as e:
+            report_error(e, idx=i)
 
     return outs
+
+def sess_data(eids):
+    sdata = []
+    for i,eid in enumerate(eids):
+        
+        try:
+            dt = load_data(eid)
+            dt.set_mask(included=True, zeros=False)
+            choice = dt.choice
+            contrasts = dt.contrasts
+            feedback = dt.feedback
+
+            sdata.append((i, eid, choice, contrasts, feedback))
+            print(f'eid {i}: {eid}')
+        except KeyError as e:
+            report_error(e, idx=i)
+
+    return sdata
+
 
 # def all_seq_stats(eids, sinfos):
 #     for i,eid in enumerate(eids):
@@ -290,27 +333,76 @@ if __name__ == '__main__':
     figures = 'figures'
 
 
-    setting = "all_smoothed_perfs"
+    setting = "sess_data"
 
-    # if setting == 'windowed_perfs':
-    #     subject = 'SWC_001'
-    #     c_prefix = os.path.join(cache, f'{lab}-{subject}')
+    if setting == 'sess_data':
+        # get all subjects with at least 15 sessions
+        subject = 'SWC_015'
 
-    #     eids, sinfos = one.search(lab=lab, details=True, subject=subject)
-    #     eids, sinfos = order_eids(eids, sinfos)
+        c_prefix = f'{cache}/{lab}-{subject}'
 
-    #     outs = sess_window_perfs(eids, sinfos)
-    #     rows = 5
-    #     cols = 5
-    #     fig, ax = plt.subplots(nrows=rows, ncols=cols, sharey=True, squeeze=True)
-    #     for r in range(rows):
-    #         for c in range(cols):
-    #             ax[r, c].plot(outs[rows*r+c][2])
-    #             ax[r, c].set_title(outs[rows*r+c][0])
-    #             ax[r, c].set_ylim([0, 1])
+        eids, sinfos = one.search(lab=lab, details=True, subject=subject)
+        eids, sinfos = order_eids(eids, sinfos)
 
-    #     plt.gcf()
-    #     plt.show()
+        
+        # if performances are already done no point recomputing
+        f_name = f'{c_prefix}-data.pkl'
+        print(f"Attempting to load {f_name}...")
+        if not os.path.isfile(f_name):
+            print("Stored file doesn't exist; loading/downloading and calculating.")
+            outs = sess_data(eids)
+            with open(f_name, 'wb') as f:
+                pkl.dump(outs, f)
+        else:
+            print("Stored file exists; loading and moving on.")
+            with open(f_name, 'rb') as f:
+                outs = pkl.load(f)
+
+        # plot all the subjects in different plots
+        inds, eids, choices, contrasts, feedback = list(zip(*outs))
+        #plt.plot(inds, [np.mean(c) for c in choices], 'ro-')
+        #tmp = np.convolve(choices[-5][-100:],np.asarray([1,-1])) == 0
+        s = 11
+        contrasts = contrasts[-s][-150:]
+        choices = choices[-s][-150:]
+        feedback = feedback[-s][-150:]
+
+        cxc = choices * contrasts
+
+        contrast_signs = np.sign(contrasts)
+        rgba_colors = np.zeros((150, 4))
+        rgba_colors[:, 1] = cxc > 0
+        rgba_colors[:, 0] = cxc < 0
+        # rgba_colors[:, 2] = 1.0
+        rgba_colors[:, 3] = np.abs(contrasts)
+        rgba_edgecolors = rgba_colors[:, :3]
+        #plt.scatter(np.arange(contrast_signs.size), contrast_signs, marker='o', s=64, edgecolors=rgba_edgecolors, color=rgba_colors)
+        plt.figure(figsize=(18,2))
+        plt.scatter(np.arange(contrast_signs.size), choices, marker='o', s=49, edgecolors=rgba_edgecolors, color=rgba_colors)
+        plt.plot(contrast_signs * 1.3, marker='_', lw=0, ms=7, c='black')
+
+        wrong = ((feedback == -1) * (contrasts != 0)).nonzero()
+        #plt.vlines(wrong,-1,1,linewidths=0.5,colors='r',linestyles='dotted')
+        #plt.scatter(np.arange(contrast_signs.size), contrast_signs, marker='o', s=49)
+        #plt.plot(contrast_signs, 'r:', lw=0.5)
+        #plt.plot(choices, 'b:', lw=0.5)
+        # for i in range(feedback.size):
+        #     if contrasts[i] > 0:
+        #         #plt.axvspan(i-.5, i+.5, facecolor='g', alpha=abs(contrasts[i]) / 2)
+        #         plt.plot(i, 1.3, marker='s', color='black', ms=5)
+        #     if contrasts[i] < 0:
+        #         #plt.axvspan(i-.5, i+.5, facecolor='r', alpha=abs(contrasts[i]) / 2)
+        #         plt.plot(i, -1.3, marker='s', color='black', ms=5)
+        #plt.plot(feedback[-s][-150:], 'g-')
+        plt.grid(b=True, which='major', axis='both')
+        plt.title(subject)
+        plt.xlabel('trial #')
+        plt.ylabel('choice')
+        plt.axis([None,None,-1.5,1.5])
+        f_prefix = f'{figures}/{lab}-{subject}'
+        plt.savefig(f'{f_prefix}-data.jpg')
+        plt.show()
+
 
     if setting == 'all_window_perfs':
 
@@ -446,7 +538,7 @@ if __name__ == '__main__':
             f_name = c_prefix + '-perf.pkl'
             if not os.path.isfile(f_name):
                 print("Stored file doesn't exist; downloading and calculating.")
-                outs = get_perf(eids, sinfos)
+                outs = get_perfs(eids)
                 with open(f_name, 'wb') as f:
                     pkl.dump(outs, f)
             else:
@@ -487,7 +579,7 @@ if __name__ == '__main__':
         f_name = f'{c_prefix}-perf.pkl'
         if not os.path.isfile(f_name):
             print("Stored file doesn't exist; downloading and calculating.")
-            outs = get_perf(eids, sinfos)
+            outs = get_perfs(eids, sinfos)
             with open(f_name, 'wb') as f:
                 pkl.dump(outs, f)
         else:
