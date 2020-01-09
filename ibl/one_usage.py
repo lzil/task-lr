@@ -10,6 +10,8 @@ import pickle as pkl
 import os
 import itertools
 
+import errno
+
 from oneibl.one import ONE
 from ibllib.misc import pprint
 
@@ -29,6 +31,19 @@ DEFAULT_D_TYPES = [
     'trials.choice',
     'trials.included'
 ]
+
+# https://github.com/gyyang/multitask
+def mkdir_p(path):
+    """
+    Portable mkdir -p
+    """
+    try:
+        os.makedirs(path)
+    except OSError as e:
+        if e.errno == errno.EEXIST and os.path.isdir(path):
+            pass
+        else:
+            raise
 
 class SessionData():
     def __init__(self, data, err=True):
@@ -337,16 +352,18 @@ if __name__ == '__main__':
 
     if setting == 'sess_data':
         # get all subjects with at least 15 sessions
-        subject = 'SWC_015'
-
-        c_prefix = f'{cache}/{lab}-{subject}'
+        subject = 'SWC_001'
+        cache_path = f'{cache}/{lab}/{subject}'
+        fig_path = f'{figures}/{lab}/{subject}'
+        mkdir_p(fig_path)
+        mkdir_p(cache_path)
 
         eids, sinfos = one.search(lab=lab, details=True, subject=subject)
         eids, sinfos = order_eids(eids, sinfos)
 
         
         # if performances are already done no point recomputing
-        f_name = f'{c_prefix}-data.pkl'
+        f_name = f'{cache_path}/data.pkl'
         print(f"Attempting to load {f_name}...")
         if not os.path.isfile(f_name):
             print("Stored file doesn't exist; loading/downloading and calculating.")
@@ -360,48 +377,66 @@ if __name__ == '__main__':
 
         # plot all the subjects in different plots
         inds, eids, choices, contrasts, feedback = list(zip(*outs))
-        #plt.plot(inds, [np.mean(c) for c in choices], 'ro-')
-        #tmp = np.convolve(choices[-5][-100:],np.asarray([1,-1])) == 0
-        s = 11
-        contrasts = contrasts[-s][-150:]
-        choices = choices[-s][-150:]
-        feedback = feedback[-s][-150:]
 
-        cxc = choices * contrasts
+        # iterate through all sessions
+        for s in range(len(inds)):
+            tlen = contrasts[s].size
+            cxc = choices[s] * contrasts[s]
 
-        contrast_signs = np.sign(contrasts)
-        rgba_colors = np.zeros((150, 4))
-        rgba_colors[:, 1] = cxc > 0
-        rgba_colors[:, 0] = cxc < 0
-        # rgba_colors[:, 2] = 1.0
-        rgba_colors[:, 3] = np.abs(contrasts)
-        rgba_edgecolors = rgba_colors[:, :3]
-        #plt.scatter(np.arange(contrast_signs.size), contrast_signs, marker='o', s=64, edgecolors=rgba_edgecolors, color=rgba_colors)
-        plt.figure(figsize=(18,2))
-        plt.scatter(np.arange(contrast_signs.size), choices, marker='o', s=49, edgecolors=rgba_edgecolors, color=rgba_colors)
-        plt.plot(contrast_signs * 1.3, marker='_', lw=0, ms=7, c='black')
+            correct = np.sign(contrasts[s])
+            rgba_colors = np.zeros((tlen, 4))
+            rgba_colors[:, 1] = cxc > 0
+            rgba_colors[:, 0] = cxc < 0
+            rgba_colors[:, 3] = np.abs(contrasts[s])
+            rgba_edgecolors = rgba_colors[:, :3]
+            #plt.scatter(np.arange(correct.size), correct, marker='o', s=64, edgecolors=rgba_edgecolors, color=rgba_colors)
 
-        wrong = ((feedback == -1) * (contrasts != 0)).nonzero()
-        #plt.vlines(wrong,-1,1,linewidths=0.5,colors='r',linestyles='dotted')
-        #plt.scatter(np.arange(contrast_signs.size), contrast_signs, marker='o', s=49)
-        #plt.plot(contrast_signs, 'r:', lw=0.5)
-        #plt.plot(choices, 'b:', lw=0.5)
-        # for i in range(feedback.size):
-        #     if contrasts[i] > 0:
-        #         #plt.axvspan(i-.5, i+.5, facecolor='g', alpha=abs(contrasts[i]) / 2)
-        #         plt.plot(i, 1.3, marker='s', color='black', ms=5)
-        #     if contrasts[i] < 0:
-        #         #plt.axvspan(i-.5, i+.5, facecolor='r', alpha=abs(contrasts[i]) / 2)
-        #         plt.plot(i, -1.3, marker='s', color='black', ms=5)
-        #plt.plot(feedback[-s][-150:], 'g-')
-        plt.grid(b=True, which='major', axis='both')
-        plt.title(subject)
-        plt.xlabel('trial #')
-        plt.ylabel('choice')
-        plt.axis([None,None,-1.5,1.5])
-        f_prefix = f'{figures}/{lab}-{subject}'
-        plt.savefig(f'{f_prefix}-data.jpg')
-        plt.show()
+            nrows, extra = divmod(tlen, 150)
+            if extra > 0:
+                nrows += 1
+            fig, ax = plt.subplots(nrows=nrows, ncols=1, sharey=True, squeeze=False, figsize=(18, 1.2*nrows))
+            for row in range(nrows):
+                ar = ax[row][0]
+                a = 150 * row
+                b = 150 * (row + 1)
+                if b > tlen:
+                    b = tlen
+                ar.scatter(
+                    x=np.arange(a,b),
+                    y=choices[s][a:b],
+                    marker='o',
+                    s=49,
+                    edgecolors=rgba_edgecolors[a:b],
+                    color=rgba_colors[a:b])
+                ar.plot(np.arange(a,b),correct[a:b] * 1.4, marker='_', lw=0, ms=8, c='black')
+
+                ar.set_ylabel('choice')
+                ar.set_ylim([-1.5,1.5])
+                ar.grid(b=True, which='major', axis='both')
+
+                # wrong = ((feedback == -1) * (contrasts != 0)).nonzero()
+                #plt.vlines(wrong,-1,1,linewidths=0.5,colors='r',linestyles='dotted')
+                #plt.scatter(np.arange(correct.size), correct, marker='o', s=49)
+                #plt.plot(correct, 'r:', lw=0.5)
+                #plt.plot(choices, 'b:', lw=0.5)
+                # for i in range(feedback.size):
+                #     if contrasts[i] > 0:
+                #         #plt.axvspan(i-.5, i+.5, facecolor='g', alpha=abs(contrasts[i]) / 2)
+                #         plt.plot(i, 1.3, marker='s', color='black', ms=5)
+                #     if contrasts[i] < 0:
+                #         #plt.axvspan(i-.5, i+.5, facecolor='r', alpha=abs(contrasts[i]) / 2)
+                #         plt.plot(i, -1.3, marker='s', color='black', ms=5)
+                #plt.plot(feedback[-s][-150:], 'g-')
+                
+            #fig.suptitle(f'{subject}, session {s}')
+            fig.tight_layout()
+            
+            f_name = f'{fig_path}/{inds[s]}-data.jpg'
+            plt.savefig(f_name)
+            print(f"Processed session {inds[s]}")
+            plt.close()
+            #pdb.set_trace()
+        #plt.show()
 
 
     if setting == 'all_window_perfs':
