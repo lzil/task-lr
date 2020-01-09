@@ -45,6 +45,7 @@ def mkdir_p(path):
         else:
             raise
 
+# custom data class that takes care of included and zero contrast trials
 class SessionData():
     def __init__(self, data, err=True):
         self._choice = data['trials.choice']
@@ -69,7 +70,7 @@ class SessionData():
         self._cxc = self._contrasts_adj * self._choice
 
         # create default mask
-        self._mask = self.set_mask(True, True)
+        self.set_mask(True, True)
 
         # make sure feedback is 1 if choice is correct, and vice versa
         assert np.count_nonzero(np.sign((self.cxc-eps) * self.feedback) - 1) == 0
@@ -158,78 +159,32 @@ def report_error(e, idx=None):
 
 # just get the overall performance per eid for given list of eids
 def get_perfs(eids):
-
     outs = []
     for i,eid in enumerate(eids):
-        
         try:
             dt = load_data(eid)
             feedback = dt.feedback
-            cxc = dt.cxc
             zeros = dt.zero_counts()
-        except KeyError as e:
-            report_error(e, idx=i)
 
-        perf = np.sum(feedback == 1) / feedback.size
-        
-        outs.append((i, eid, perf, zeros))
-        print(f'eid {i}: {eid}, perf: {perf}, zeros: {zeros}')
-
-    return outs
-
-
-# get windowed performance across all sessions
-# get rid of this eventually as it generalizes to a smoothed perf with a custom window filter
-def all_window_perfs(eids, sinfos, window=20):
-    outs = []
-    for i,eid in enumerate(eids):
-        try:
-            dt = load_data(eid)
-            feedback = dt.feedback
-            cxc = dt.cxc
-
-            if feedback.size < window + 1:
-                continue
-
-            feedback = (feedback + 1) / 2
-
-            perfs = []
-            # initial windowed performance
-            running_perf = sum(feedback[:window]) / window
-            for j in range(window, feedback.size):
-                running_perf += (feedback[j] - feedback[j - window]) / window
-                perfs.append(running_perf)
-
-            outs.append((i, eid, perfs))
-            print(f'eid {i}: {eid}')
+            perf = np.sum(feedback == 1) / feedback.size
+            
+            outs.append((i, eid, perf, zeros))
+            print(f'eid {i}: {eid}, perf: {perf}, zeros: {zeros}')
 
         except KeyError as e:
             report_error(e, idx=i)
 
     return outs
 
-# get smoothed performance across all sessions
-def all_smoothed_perfs(eids, sinfos, fil=None, a=0.75):
-    # no provided filter
-    if fil is None:
-        x = (1 - a) / (1 + a) # did a bunch of math on the whiteboard to figure this out
-        fil_len = 111
-        fil_cen = int((fil_len - 1) / 2)
-        fil = np.ones((fil_len))
-        fil[fil_cen] = x
-        for i in range(fil_cen):
-            fil[fil_cen-1-i] = fil[fil_cen-i] * a
-            fil[fil_cen+1+i] = fil[fil_cen+i] * a
-    else:
-        assert abs(sum(fil) - 1) < eps
-        fil_len = len(fil)
 
+# get smoothed performance across all sessions, given a smoothing filter
+def get_smoothed_perfs(eids, fil):
+    fil_len = fil.size
     outs = []
     for i,eid in enumerate(eids):
         try:
             dt = load_data(eid)
             feedback = dt.feedback
-            cxc = dt.cxc
 
             if feedback.size < fil_len * 2:
                 continue
@@ -340,19 +295,47 @@ def sess_data(eids):
 #     return outs
 
 
+# helper function for smoothing filter
+def create_filter(fil_type, p=None):
+    if fil_type == 'flat1':
+        fil_len = 21
+        fil_cen = int((fil_len - 1)/2)
+        fil = np.ones((fil_len))
+        fil[fil_cen] = p
+        for i in range(fil_cen):
+            fil[fil_cen-i-1] = fil[fil_cen-i] - 0.01
+            fil[fil_cen+i+1] = fil[fil_cen+i] - 0.01
+
+    if fil_type == 'custom1':
+        fil = np.asarray([1/6, 1/3, 1/3, 1/6])
+
+    if fil_type == 'exp':
+        x = (1 - p) / (1 + p) # did a bunch of math on the whiteboard to figure this out
+        fil_len = 111
+        fil_cen = int((fil_len - 1) / 2)
+        fil = np.ones((fil_len))
+        fil[fil_cen] = x
+        for i in range(fil_cen):
+            fil[fil_cen-1-i] = fil[fil_cen-i] * a
+            fil[fil_cen+1+i] = fil[fil_cen+i] * a
+
+    assert abs(sum(fil) - 1) < eps
+
+    return fil
+
+
 if __name__ == '__main__':
     one = ONE()
 
-    lab = 'hoferlab'
     cache = 'cache'
     figures = 'figures'
 
-
     setting = "sess_data"
 
+    lab = 'angelakilab'
+    subject = 'IBL-T4'
+
     if setting == 'sess_data':
-        # get all subjects with at least 15 sessions
-        subject = 'SWC_001'
         cache_path = f'{cache}/{lab}/{subject}'
         fig_path = f'{figures}/{lab}/{subject}'
         mkdir_p(fig_path)
@@ -360,7 +343,6 @@ if __name__ == '__main__':
 
         eids, sinfos = one.search(lab=lab, details=True, subject=subject)
         eids, sinfos = order_eids(eids, sinfos)
-
         
         # if performances are already done no point recomputing
         f_name = f'{cache_path}/data.pkl'
@@ -389,7 +371,6 @@ if __name__ == '__main__':
             rgba_colors[:, 0] = cxc < 0
             rgba_colors[:, 3] = np.abs(contrasts[s])
             rgba_edgecolors = rgba_colors[:, :3]
-            #plt.scatter(np.arange(correct.size), correct, marker='o', s=64, edgecolors=rgba_edgecolors, color=rgba_colors)
 
             nrows, extra = divmod(tlen, 150)
             if extra > 0:
@@ -414,144 +395,76 @@ if __name__ == '__main__':
                 ar.set_ylim([-1.5,1.5])
                 ar.grid(b=True, which='major', axis='both')
 
-                # wrong = ((feedback == -1) * (contrasts != 0)).nonzero()
-                #plt.vlines(wrong,-1,1,linewidths=0.5,colors='r',linestyles='dotted')
-                #plt.scatter(np.arange(correct.size), correct, marker='o', s=49)
-                #plt.plot(correct, 'r:', lw=0.5)
-                #plt.plot(choices, 'b:', lw=0.5)
-                # for i in range(feedback.size):
-                #     if contrasts[i] > 0:
-                #         #plt.axvspan(i-.5, i+.5, facecolor='g', alpha=abs(contrasts[i]) / 2)
-                #         plt.plot(i, 1.3, marker='s', color='black', ms=5)
-                #     if contrasts[i] < 0:
-                #         #plt.axvspan(i-.5, i+.5, facecolor='r', alpha=abs(contrasts[i]) / 2)
-                #         plt.plot(i, -1.3, marker='s', color='black', ms=5)
-                #plt.plot(feedback[-s][-150:], 'g-')
-                
-            #fig.suptitle(f'{subject}, session {s}')
             fig.tight_layout()
             
             f_name = f'{fig_path}/{inds[s]}-data.jpg'
             plt.savefig(f_name)
             print(f"Processed session {inds[s]}")
             plt.close()
-            #pdb.set_trace()
-        #plt.show()
 
+    if setting == 'subject_smoothed_perfs':
 
-    if setting == 'all_window_perfs':
-
-        window = 10
-        # use all subjects for one lab
-        eids, sinfos = one.search(lab=lab, details=True)
-        subjects = get_subject_counts(sinfos)[:6]
-        subjects, counts = zip(*subjects)
-
-        perf_outs = []
-        fig, ax = plt.subplots(nrows=6, ncols=1, sharey=True, squeeze=False, figsize=(20,12))
-
-        for ind, subject in enumerate(subjects):
-            print(f'Starting on subject: {subject}')
-            c_prefix = f'{cache}/{lab}-{subject}'
-            
-
-            eids, sinfos = one.search(lab=lab, details=True, subject=subject)
-            eids, sinfos = order_eids(eids, sinfos)
+        filter_type = 'flat1'
+        p = 0.1
         
-            # if performances are already done no point recomputing
-            f_name = f'{c_prefix}-window-{window}.pkl'
-            if not os.path.isfile(f_name):
-                print("Stored file doesn't exist; downloading and calculating.")
-                outs = all_window_perfs(eids, sinfos, window=window)
-                with open(f_name, 'wb') as f:
-                    pkl.dump(outs, f)
-            else:
-                print("Stored file exists; loading and moving on to the next subject.")
-                with open(f_name, 'rb') as f:
-                    outs = pkl.load(f)
+        fil = create_filter(filter_type, p=p)
 
-            perf_outs.append((subject, outs))
+        eids, sinfos = one.search(lab=lab, details=True, subject=subject)
+        eids, sinfos = order_eids(eids, sinfos)
 
-            inds, eids, perfs = list(zip(*outs))
-            perf_long = []
-            perf_lens = []
-            for k in perfs:
-                perf_long += k
-                perf_lens.append(len(perf_long))
-            
-            row, col = divmod(ind, 1)
-            ax[row,col].plot(perf_long, lw=0.5)
-            ax[row,col].set_ylim([0, 1])
-            ax[row,col].set_title(subject)
-            ax[row,col].vlines(perf_lens, ymin=0, ymax=1, linestyles='dashed')
-            ax[row,col].set_xlim([0,None])
+        cache_path = f'{cache}/{lab}/{subject}'
+        fig_path = f'{figures}/{lab}/{subject}'
+        mkdir_p(fig_path)
+        mkdir_p(cache_path)
+
+
+        # if performances are already done no point recomputing
+        f_name = f'{cache_path}/{filter_type}-{p}.pkl'
+        if not os.path.isfile(f_name):
+            print("Stored file doesn't exist; downloading and calculating.")
+            outs = get_smoothed_perfs(eids, fil=fil)
+            with open(f_name, 'wb') as f:
+                pkl.dump(outs, f)
+        else:
+            print("Stored file exists; loading and moving on.")
+            with open(f_name, 'rb') as f:
+                outs = pkl.load(f)
+
+        inds, eids, perfs = list(zip(*outs))
+        sess_lens = []
+
+        running_len = 0
+        for k in perfs:
+            running_len += k.size
+            sess_lens.append(running_len)
+
+        sess_ind = 0
+        perf_long = np.concatenate(perfs, axis=0)
+
+        tlen = sess_lens[-1]
+
+        nrows = divmod(tlen, 10000)[0]
+
+        fig, ax = plt.subplots(nrows=nrows, ncols=1, sharey=True, squeeze=False, figsize=(18,nrows*2))
+
+        for row in range(nrows):
+            ar = ax[row][0]
+            a = 10000 * row
+            b = 10000 * (row + 1)
+            if b > tlen:
+                b = tlen
+            ar.plot(np.arange(a,b), perf_long[a:b], lw=0.5)
+            ar.set_xlim([a, b])
+            ar.set_ylim([0, 1])
+            ar.vlines(sess_lens, ymin=0, ymax=1, linestyles='dashed', linewidths=0.5)
+            ar.set_ylabel('performance')
+            #ar.set_xlim([0,None])
 
         # plot all the subjects in different plots
         # inds, eids, perfs = list(zip(*outs))
-        f_prefix = f'{figures}/{lab}'
-        plt.gcf()
-        plt.savefig(f'{f_prefix}-window-{window}.jpg', dpi=500)
-        plt.show()
-
-    if setting == 'all_smoothed_perfs':
-
-        a = 0.95
-        a = 'custom'
-        fil = np.asarray([1/6, 1/3, 1/3, 1/6])
-
-        # use all subjects for one lab
-        eids, sinfos = one.search(lab=lab, details=True)
-        subjects = get_subject_counts(sinfos)[:1]
-        subjects, counts = zip(*subjects)
-
-        perf_outs = []
-        fig, ax = plt.subplots(nrows=1, ncols=1, sharey=True, squeeze=False, figsize=(20,12))
-
-        for ind, subject in enumerate(subjects):
-            print(f'Starting on subject: {subject}')
-            c_prefix = f'{cache}/{lab}-{subject}'
-            
-
-            eids, sinfos = one.search(lab=lab, details=True, subject=subject)
-            eids, sinfos = order_eids(eids, sinfos)
-        
-            # if performances are already done no point recomputing
-            f_name = f'{c_prefix}-smoothed-{a}.pkl'
-            if not os.path.isfile(f_name):
-                print("Stored file doesn't exist; downloading and calculating.")
-                outs = all_smoothed_perfs(eids, sinfos, a=a, fil=fil)
-                with open(f_name, 'wb') as f:
-                    pkl.dump(outs, f)
-            else:
-                print("Stored file exists; loading and moving on to the next subject.")
-                with open(f_name, 'rb') as f:
-                    outs = pkl.load(f)
-
-            perf_outs.append((subject, outs))
-
-            inds, eids, perfs = list(zip(*outs))
-            perf_lens = []
-            running_len = 0
-            for k in perfs:
-                running_len += k.size
-                perf_lens.append(running_len)
-
-            perf_long = np.concatenate(perfs, axis=0)
-            
-            row, col = divmod(ind, 1)
-            ax[row,col].plot(perf_long, lw=0.5)
-            ax[row,col].set_ylim([0, 1])
-            ax[row,col].set_title(subject)
-            ax[row,col].vlines(perf_lens, ymin=0, ymax=1, linestyles='dashed')
-            ax[row,col].set_xlim([0,None])
-
-        # plot all the subjects in different plots
-        # inds, eids, perfs = list(zip(*outs))
-        f_prefix = f'{figures}/{lab}'
-        plt.gcf()
-        plt.savefig(f'{f_prefix}-smoothed-{a}.jpg')
-        plt.show()
-
+        fig.tight_layout()
+        plt.savefig(f'{fig_path}/{filter_type}-{p}.jpg')
+        plt.close()
 
     if setting == 'all_perfs':
 
@@ -559,18 +472,18 @@ if __name__ == '__main__':
         subjects = get_subject_counts(sinfos)
         subjects, counts = zip(*subjects[:6])
 
-        perf_outs = []
-        fig, ax = plt.subplots(nrows=2, ncols=3, sharey=True)
+        fig, ax = plt.subplots(nrows=2, ncols=3, sharey=True, squeeze=False, figsize=(14, 6))
 
         for ind, subject in enumerate(subjects):
             print(f'Starting on subject: {subject}')
-            c_prefix = f'{cache}/{lab}-{subject}'
-
+            cache_path = f'{cache}/{lab}/{subject}'
+            mkdir_p(cache_path)
+            
             eids, sinfos = one.search(lab=lab, details=True, subject=subject)
             eids, sinfos = order_eids(eids, sinfos)
         
             # if performances are already done no point recomputing
-            f_name = c_prefix + '-perf.pkl'
+            f_name = f'{cache_path}/perf.pkl'
             if not os.path.isfile(f_name):
                 print("Stored file doesn't exist; downloading and calculating.")
                 outs = get_perfs(eids)
@@ -581,60 +494,59 @@ if __name__ == '__main__':
                 with open(f_name, 'rb') as f:
                     outs = pkl.load(f)
 
-            perf_outs.append((subject, outs))
-
             inds, eids, perfs, _ = list(zip(*outs))
             row, col = divmod(ind, 3)
-            ax[row,col].plot(inds, perfs, 'r.-')
-            ax[row,col].set_ylim([0, 1])
-            ax[row,col].set_title(subject)
-            ax[row,col].grid(b=True, which='major', axis='x')
-            ax[row,col].set_xlabel('session EID')
-            ax[row,col].set_ylabel('session performance')
-
-        # plot all the subjects in different plots
-        # inds, eids, perfs = list(zip(*outs))
-        f_prefix = f'{figures}/{lab}'
+            arc = ax[row,col]
+            arc.plot(inds, perfs, 'r.-')
+            arc.set_ylim([0, 1])
+            arc.set_title(subject)
+            arc.grid(b=True, which='major', axis='x')
+            arc.set_xlabel('session')
+            arc.set_ylabel('perf')
+        
         plt.gcf()
-        plt.savefig(f'{f_prefix}-perf.jpg')
+        plt.tight_layout()
+        fig_path = f'{figures}/{lab}'
+        mkdir_p(fig_path)
+        plt.savefig(f'{fig_path}/perf.jpg')
         plt.show()
 
     if setting == 'sess_perfs':
 
-        # get all subjects with at least 15 sessions
-        subject = 'SWC_002'
-
-        print(f'Starting on subject: {subject}')
-        c_prefix = f'{cache}/{lab}-{subject}'
+        cache_path = f'{cache}/{lab}/{subject}'
+        fig_path = f'{figures}/{lab}/{subject}'
+        mkdir_p(cache_path)
+        mkdir_p(fig_path)
 
         eids, sinfos = one.search(lab=lab, details=True, subject=subject)
         eids, sinfos = order_eids(eids, sinfos)
     
         # if performances are already done no point recomputing
-        f_name = f'{c_prefix}-perf.pkl'
+        f_name = f'{cache_path}/perf.pkl'
         if not os.path.isfile(f_name):
             print("Stored file doesn't exist; downloading and calculating.")
-            outs = get_perfs(eids, sinfos)
+            outs = get_perfs(eids)
             with open(f_name, 'wb') as f:
                 pkl.dump(outs, f)
         else:
-            print("Stored file exists; loading and moving on to the next subject.")
+            print("Stored file exists; loading and moving on.")
             with open(f_name, 'rb') as f:
                 outs = pkl.load(f)
 
         # plot all the subjects in different plots
         inds, eids, perfs, zeros = list(zip(*outs))
+        plt.figure(figsize=(18, 5))
         plt.plot(inds, perfs, 'ro-')
         for j in range(len(outs)):
-            plt.annotate(zeros[j], (inds[j], perfs[j]))
+            plt.annotate(zeros[j], (inds[j], perfs[j]), fontsize='small')
         plt.grid(b=True, which='major', axis='x')
         plt.title(subject)
-        plt.xlabel('session EID')
-        plt.ylabel('session performance')
+        plt.xlabel('session')
+        plt.ylabel('avg performance')
         plt.axis([None,None,0,1])
-        f_prefix = f'{figures}/{lab}-{subject}'
-        plt.savefig(f'{f_prefix}-perf.jpg')
-        plt.show()
+        plt.tight_layout()
+        plt.savefig(f'{fig_path}/perf.jpg')
+        plt.close()
         
     # elif setting == 'seq_stats':
 
