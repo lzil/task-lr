@@ -9,6 +9,7 @@ https://docs.internationalbrainlab.org/en/latest/_autosummary/oneibl.one.html
 import pickle as pkl
 import os
 import itertools
+import sys
 
 import errno
 
@@ -19,6 +20,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 import pdb
+
+sys.path.insert(1, '../')
+
+from tools import *
 
 eps = 1e-6
 
@@ -32,18 +37,6 @@ DEFAULT_D_TYPES = [
     'trials.included'
 ]
 
-# https://github.com/gyyang/multitask
-def mkdir_p(path):
-    """
-    Portable mkdir -p
-    """
-    try:
-        os.makedirs(path)
-    except OSError as e:
-        if e.errno == errno.EEXIST and os.path.isdir(path):
-            pass
-        else:
-            raise
 
 # custom data class that takes care of included and zero contrast trials
 class SessionData():
@@ -138,7 +131,7 @@ def order_eids(eids, sinfos):
 
 
 # download and load relevant data
-def load_data(eid, d_types=DEFAULT_D_TYPES, cache_dir='labs'):
+def load_data(eid, d_types=DEFAULT_D_TYPES, cache_dir='labs', sess_type=True):
     just_data = one.load(
         eid=eid,
         dataset_types=d_types,
@@ -146,6 +139,8 @@ def load_data(eid, d_types=DEFAULT_D_TYPES, cache_dir='labs'):
 
     # data in the useful form of type: np array
     data_dict = dict(zip(d_types, just_data))
+    if not sess_type:
+        return data_dict
     sess = SessionData(data_dict)
     return sess
 
@@ -319,7 +314,7 @@ def create_filter(fil_type, p=None):
             fil[fil_cen-1-i] = fil[fil_cen-i] * a
             fil[fil_cen+1+i] = fil[fil_cen+i] * a
 
-    assert abs(sum(fil) - 1) < eps
+    assert np.abs(np.sum(fil) - 1) < eps
 
     return fil
 
@@ -330,12 +325,13 @@ if __name__ == '__main__':
     cache = 'cache'
     figures = 'figures'
 
-    setting = "sess_data"
+    setting = "sess_perfs"
 
     lab = 'angelakilab'
     subject = 'IBL-T4'
 
     if setting == 'sess_data':
+
         cache_path = f'{cache}/{lab}/{subject}'
         fig_path = f'{figures}/{lab}/{subject}'
         mkdir_p(fig_path)
