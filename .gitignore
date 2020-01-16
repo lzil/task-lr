@@ -11,5 +11,6 @@ figures
 ibl/*.pkl
 *_.*
 
+lim/data
 
 *.ipynb_checkpoints

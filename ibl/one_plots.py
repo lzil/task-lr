@@ -25,9 +25,200 @@ sys.path.insert(1, '../')
 
 from tools import *
 
+one = ONE()
+
+eps = 1e-6
+
+
+DEFAULT_D_TYPES = [
+    'trials.choice',
+    'trials.contrastLeft',
+    'trials.contrastRight',
+    'trials.feedbackType',
+    'trials.choice',
+    'trials.included'
+]
+
+
+# custom data class that takes care of included and zero contrast trials
+class SessionData():
+    def __init__(self, data, err=True):
+        self._choice = data['trials.choice']
+        self._contrast_left = data['trials.contrastLeft']
+        self._contrast_right = data['trials.contrastRight']
+        self._feedback = data['trials.feedbackType']
+        self._included = data['trials.included']
+
+        if err:
+            if self._choice is None:
+                raise KeyError("choice array missing")
+            if self._contrast_left is None or self._contrast_right is None:
+                raise KeyError("contrast array(s) missing")
+            if self._feedback is None:
+                raise KeyError("feedback array missing")
+
+        # turns the contrastLeft and contrastRight into usable np array
+        # contrast is increased by 1 to differentiate positive / negative trials
+        self._contrasts = np.nan_to_num(self._contrast_left) - np.nan_to_num(self._contrast_right)
+        self._contrasts_adj = np.nan_to_num(self._contrast_left + 1) - np.nan_to_num(self._contrast_right + 1)
+        self._zero_contrasts = (self._contrasts == 0) * 1
+        self._cxc = self._contrasts_adj * self._choice
+
+        # create default mask
+        self.set_mask(True, True)
+
+        # make sure feedback is 1 if choice is correct, and vice versa
+        assert np.count_nonzero(np.sign((self.cxc-eps) * self.feedback) - 1) == 0
+
+
+    # to mask trials that aren't included and/or trials with zero contrast given
+    def set_mask(self, included, zeros):
+        mask = np.ones_like(self._choice)
+        if included and self._included is not None:
+            mask *= (self._included * 1)
+        if zeros:
+            # zero contrast trials don't count toward actual accuracy
+            mask *= (1 - self._zero_contrasts)
+        self._mask = mask
+
+    @property
+    def choice(self):
+        return self._choice[self._mask == 1]
+    
+    @property
+    def feedback(self):
+        return self._feedback[self._mask == 1]
+
+    @property
+    def cxc(self):
+        # cxcs: contrasts x choice
+        return self._cxc[self._mask == 1]
+
+    @property
+    def contrasts(self):
+        return self._contrasts[self._mask == 1]
+    
+
+    def zero_counts(self):
+        return np.sum(self._zero_contrasts)
+
+    
+    
+def generate_acc(size, acc):
+    ...
+
+
+# return counts for each of the subjects
+# input: a list of details dictionaries (found via one.search with details=True)
+# output: a list of tuples of the form (subject, #) in descending order of #
+def get_subject_counts(sinfos):
+    subjs = {}
+    for info in sinfos:
+        if info['subject'] in subjs:
+            subjs[info['subject']] += 1
+        else:
+            subjs[info['subject']] = 1
+
+    subj_array = [(k,subjs[k]) for k in list(subjs)]
+    subj_array.sort(key=lambda x:x[1], reverse=True)
+    return subj_array
+
+
+# sort eid and info lists by when the experiment happened
+def order_eids(eids, sinfos):
+    start_times = [s['start_time'] for s in sinfos]
+    eids_ordered, sinfos_ordered = zip(*[(x,y) for _,x,y in sorted(zip(start_times, eids, sinfos), key=lambda z:z[0])])
+
+    return eids_ordered, sinfos_ordered
+
+
+# download and load relevant data
+def load_data(eid, d_types=DEFAULT_D_TYPES, cache_dir='labs', sess_type=True):
+    just_data = one.load(
+        eid=eid,
+        dataset_types=d_types,
+        cache_dir=cache_dir)
+
+    # data in the useful form of type: np array
+    data_dict = dict(zip(d_types, just_data))
+    if not sess_type:
+        return data_dict
+    sess = SessionData(data_dict)
+    return sess
+
+def report_error(e, idx=None):
+    if idx is not None:
+        print(f'eid {idx}: skipping, error happened:')
+    else:
+        print('skipping, error happened:')
+    print(repr(e))
+
+
+# just get the overall performance per eid for given list of eids
+def get_perfs(eids):
+    outs = []
+    for i,eid in enumerate(eids):
+        try:
+            dt = load_data(eid)
+            feedback = dt.feedback
+            zeros = dt.zero_counts()
+
+            perf = np.sum(feedback == 1) / feedback.size
+            
+            outs.append((i, eid, perf, zeros))
+            print(f'eid {i}: {eid}, perf: {perf}, zeros: {zeros}')
+
+        except KeyError as e:
+            report_error(e, idx=i)
+
+    return outs
+
+
+# get smoothed performance across all sessions, given a smoothing filter
+def get_smoothed_perfs(eids, fil):
+    fil_len = fil.size
+    outs = []
+    for i,eid in enumerate(eids):
+        try:
+            dt = load_data(eid)
+            feedback = dt.feedback
+
+            if feedback.size < fil_len * 2:
+                continue
+
+            feedback = (feedback + 1) / 2
+
+            smooth = np.convolve(feedback, fil, mode='valid')
+
+            outs.append((i, eid, smooth))
+            print(f'eid {i}: {eid}')
+
+        except KeyError as e:
+            report_error(e, idx=i)
+
+    return outs
+
+def get_sess_data(eids):
+    sdata = []
+    for i,eid in enumerate(eids):
+        
+        try:
+            dt = load_data(eid)
+            dt.set_mask(included=True, zeros=False)
+            choice = dt.choice
+            contrasts = dt.contrasts
+            feedback = dt.feedback
+
+            sdata.append((i, eid, choice, contrasts, feedback))
+            print(f'eid {i}: {eid}')
+        except KeyError as e:
+            report_error(e, idx=i)
+
+    return sdata
+
+
 
 def sess_perfs(lab, subject, cache='cache', figures='figures'):
-    one = ONE()
 
     cache_path = f'{cache}/{lab}/{subject}'
     fig_path = f'{figures}/{lab}/{subject}'
@@ -65,7 +256,7 @@ def sess_perfs(lab, subject, cache='cache', figures='figures'):
     plt.close()
 
 
-def sess_data(lab, subject, cache='cache', figures='figures'):
+def sess_data(lab, subject, cache='cache', figures='figures', debug=False):
     cache_path = f'{cache}/{lab}/{subject}'
     fig_path = f'{figures}/{lab}/{subject}'
     mkdir_p(fig_path)
@@ -79,7 +270,7 @@ def sess_data(lab, subject, cache='cache', figures='figures'):
     print(f"Attempting to load {f_name}...")
     if not os.path.isfile(f_name):
         print("Stored file doesn't exist; loading/downloading and calculating.")
-        outs = sess_data(eids)
+        outs = get_sess_data(eids)
         with open(f_name, 'wb') as f:
             pkl.dump(outs, f)
     else:
@@ -101,6 +292,7 @@ def sess_data(lab, subject, cache='cache', figures='figures'):
         rgba_colors[:, 0] = cxc < 0
         rgba_colors[:, 3] = np.abs(contrasts[s])
         rgba_edgecolors = rgba_colors[:, :3]
+        sizes = 17 * np.log(16 * np.abs(contrasts[s]) + 2)
 
         nrows, extra = divmod(tlen, 150)
         if extra > 0:
@@ -116,10 +308,10 @@ def sess_data(lab, subject, cache='cache', figures='figures'):
                 x=np.arange(a,b),
                 y=choices[s][a:b],
                 marker='o',
-                s=49,
+                s=sizes[a:b],
                 edgecolors=rgba_edgecolors[a:b],
                 color=rgba_colors[a:b])
-            ar.plot(np.arange(a,b),correct[a:b] * 1.4, marker='_', lw=0, ms=8, c='black')
+            # ar.plot(np.arange(a,b),correct[a:b] * 1.4, marker='_', lw=0, ms=8, c='black')
 
             ar.set_ylabel('choice')
             ar.set_ylim([-1.5,1.5])
@@ -127,14 +319,18 @@ def sess_data(lab, subject, cache='cache', figures='figures'):
 
         fig.tight_layout()
         
-        f_name = f'{fig_path}/{inds[s]}-data.jpg'
-        plt.savefig(f_name)
-        print(f"Processed session {inds[s]}")
-        plt.close()
+        if debug:
+            plt.show()
+            break
+        else:
+            f_name = f'{fig_path}/{inds[s]}-data.jpg'
+            plt.savefig(f_name)
+            print(f"Processed session {inds[s]}")
+            plt.close()
 
 
 
-def subject_smoothed_perfs(lab, cache='cache', figures='figures'):
+def subject_smoothed_perfs(lab, subject, cache='cache', figures='figures'):
     filter_type = 'flat1'
     p = 0.1
     
