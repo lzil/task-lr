@@ -36,7 +36,7 @@ if __name__ == '__main__':
         reader = csv.DictReader(f, delimiter=",")
         fn = reader.fieldnames
         
-        subject = 'VP01'
+        subject = 'AA02'
 
         # first find all the sessions belonging to subject mouse
 

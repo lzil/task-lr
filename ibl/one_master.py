@@ -24,7 +24,7 @@ import pdb
 sys.path.insert(1, '../')
 
 from tools import *
-import one_plots
+from one_tools import *
 
 
 
@@ -104,33 +104,7 @@ import one_plots
 #     return outs
 
 
-# helper function for smoothing filter
-def create_filter(fil_type, p=None):
-    if fil_type == 'flat1':
-        fil_len = 21
-        fil_cen = int((fil_len - 1)/2)
-        fil = np.ones((fil_len))
-        fil[fil_cen] = p
-        for i in range(fil_cen):
-            fil[fil_cen-i-1] = fil[fil_cen-i] - 0.01
-            fil[fil_cen+i+1] = fil[fil_cen+i] - 0.01
 
-    if fil_type == 'custom1':
-        fil = np.asarray([1/6, 1/3, 1/3, 1/6])
-
-    if fil_type == 'exp':
-        x = (1 - p) / (1 + p) # did a bunch of math on the whiteboard to figure this out
-        fil_len = 111
-        fil_cen = int((fil_len - 1) / 2)
-        fil = np.ones((fil_len))
-        fil[fil_cen] = x
-        for i in range(fil_cen):
-            fil[fil_cen-1-i] = fil[fil_cen-i] * a
-            fil[fil_cen+1+i] = fil[fil_cen+i] * a
-
-    assert np.abs(np.sum(fil) - 1) < eps
-
-    return fil
 
 
 if __name__ == '__main__':
@@ -139,26 +113,108 @@ if __name__ == '__main__':
     cache = 'cache'
     figures = 'figures'
 
-
-
-    setting = "sess_data"
-
     lab = 'hoferlab'
     subject = 'SWC_015'
 
+    eids, sinfos = one.search(lab=lab, details=True, subject=subject)
+    eids, sinfos = order_eids(eids, sinfos)
 
-    if setting == 'sess_data':
-        one_plots.sess_data(lab, subject, cache, figures)
+    outs = []
 
-    if setting == 'subject_smoothed_perfs':
-        one_plots.subject_smoothed_perfs(lab, subject, cache, figures)
+    cache_path = f'{cache}/{lab}/{subject}'
+    f_name = f'{cache_path}/raw.pkl'
 
-    if setting == 'all_perfs':
-        one_plots.all_perfs(lab, cache, figures)
+    
 
-    if setting == 'sess_perfs':
-        one_plots.sess_perfs(lab, subject, cache, figures)
-        
+    dts = []
+
+    if not os.path.isfile(f_name):
+        print("Stored file doesn't exist; loading/downloading and calculating.")
+        exists = False
+    else:
+        print("Stored file exists; loading and moving on.")
+        with open(f_name, 'rb') as f:
+            dts = pkl.load(f)
+            exists = True
+
+    if exists:
+        for i, dt in dts:
+
+            feedback = dt.feedback
+
+            left = sum(dt.contrasts > 0)
+            left_correct = np.where(dt.contrasts[np.where(dt.cxc > 0)[0]] > 0)[0].size
+            right = sum(dt.contrasts < 0)
+            right_correct = np.where(dt.contrasts[np.where(dt.cxc > 0)[0]] < 0)[0].size
+
+            if left == 0:
+                left_perf = 0
+            if right == 0:
+                right_perf = 0
+            if left > 0 and right > 0:
+                left_perf = left_correct / left
+                right_perf = right_correct / right
+
+            left_choice_prop = np.where(dt.choice > 0)[0].size / dt.session_len
+            left_prop = left / dt.session_len
+
+            perf = np.sum(feedback == 1) / feedback.size
+            
+            outs.append((i, perf, left_perf, right_perf, left_prop, left_choice_prop))
+            #print(f'eid {i}: {eid}, perf: {perf}, left: {left}, right: {right}, lc: {left_correct}, rc: {right_correct}')
+
+    else:
+
+
+        for i,eid in enumerate(eids):
+
+            try:
+                dt = load_data(one, eid)
+                dts.append((i, dt))
+
+                feedback = dt.feedback
+
+                left = sum(dt.contrasts > 0)
+                left_correct = np.where(dt.contrasts[np.where(dt.cxc > 0)[0]] > 0)[0].size
+                right = sum(dt.contrasts < 0)
+                right_correct = np.where(dt.contrasts[np.where(dt.cxc > 0)[0]] < 0)[0].size
+
+                if left == 0:
+                    left_perf = 0
+                if right == 0:
+                    right_perf = 0
+                if left > 0 and right > 0:
+                    left_perf = left_correct / left
+                    right_perf = right_correct / right
+
+                left_choice_prop = np.where(dt.choice > 0)[0].size / dt.session_len
+                left_prop = left / dt.session_len
+
+                perf = np.sum(feedback == 1) / feedback.size
+                
+                outs.append((i, perf, left_perf, right_perf, left_prop, left_choice_prop))
+                print(f'eid {i}: {eid}, perf: {perf}, left: {left}, right: {right}, lc: {left_correct}, rc: {right_correct}')
+
+            except KeyError as e:
+                report_error(e, idx=i)
+
+        with open(f_name, 'wb') as f:
+            pkl.dump(dts, f)
+
+
+    inds, perfs, lperfs, rperfs, left, lcp = list(zip(*outs))
+
+    plt.plot(inds, perfs, label='perf')
+    plt.plot(inds, lperfs, label='lperf')
+    plt.plot(inds, rperfs, label='rperf')
+    plt.plot(inds, left, label='lprop')
+    plt.plot(inds, lcp, label='lcprop')
+
+    plt.legend()
+
+    plt.show()
+
+
     # elif setting == 'seq_stats':
 
     #     f_name = c_prefix + '-stats.pkl'
