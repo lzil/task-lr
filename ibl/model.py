@@ -55,118 +55,117 @@ class glmhmm:
 
 
 class hmm:
-    def __init__(self, dts, states=2):
-
+    def __init__(self, states=2):
         self.n_states = states
-
-        self.dts = [i[3] for i in dts]
-
-        self.dt = self.dts[56]
-
-        self.choice = self.dt.choice
-        self.choice[np.where(self.choice == 1)[0]] = 0
-        self.choice[np.where(self.choice == -1)[0]] = 1
 
         # normalized transition matrix
         # starting state x ending state
         m_trans = np.random.rand(self.n_states, self.n_states)
         self.m_trans = (m_trans / np.sum(m_trans, axis=0)).T
-        print(self.m_trans)
 
         # output matrix
         m_out = np.random.rand(self.n_states, 2)
         self.m_out = (m_out.T / np.sum(m_out, axis=1)).T
-        print(self.m_out)
 
         m_init = np.random.rand(self.n_states)
         self.m_init = m_init / np.sum(m_init)
     
 
 
+    def _EM_step(self, dts):
+        n_sessions = len(dts)
+        
+        _gammas = np.zeros((self.n_states))
+        _gammas_minus_one = np.zeros((self.n_states))
+        _xi = np.zeros((self.n_states,self.n_states))
+        _inits = np.zeros((self.n_states))
+        _gamma_one_counts = np.zeros((self.n_states))
 
-    def forward(self):
-        choice = self.choice
-        dlen = len(choice)
+        px = np.zeros((n_sessions))
 
-        # alphas: timesteps x n_states
-        alphas = np.ones((dlen, self.n_states))
-        rhos = np.zeros((dlen))
+        for idx, sess in enumerate(dts):
 
-        #m_rest = np.sum(self.m_trans, axis=0) / np.sum(self.m_trans)
-        alphas[0] = self.m_init * self.m_out[:,choice[0]]
-        rhos[0] = np.sum(alphas[0])
+            choice = sess.choice
+            choice[np.where(choice == 1)[0]] = 0
+            choice[np.where(choice == -1)[0]] = 1
 
-        alphas[0] /= rhos[0]
+            dlen = len(choice)
 
-        for i in range(1, dlen):
-            # h: n_states
-            h = alphas[i-1] @ self.m_trans
-            alpha_bar = h * self.m_out[:,choice[i]]
-            rhos[i] = np.sum(alpha_bar)
-            alphas[i] = alpha_bar / rhos[i]
+            # forward step
+            # alphas: timesteps x n_states
+            alphas = np.ones((dlen, self.n_states))
+            rhos = np.zeros((dlen))
 
-        return alphas, rhos
+            #m_rest = np.sum(self.m_trans, axis=0) / np.sum(self.m_trans)
+            alphas[0] = self.m_init * self.m_out[:,choice[0]]
+            rhos[0] = np.sum(alphas[0])
 
-    def backward(self, rhos):
-        choice = self.choice
-        dlen = len(choice)
+            alphas[0] /= rhos[0]
 
-        # betas: timesteps x n_states
-        betas = np.ones((dlen, self.n_states))
-
-        betas[dlen - 1] = np.ones((self.n_states))
-        #betas[dlen - 1] /= rhos[-1]
-
-        for i in range(dlen - 1, 0, -1):
-            # h: n_states
-            h = self.m_out[:,choice[i]] * betas[i]
-            beta_bar = self.m_trans @ h
-            betas[i - 1] = beta_bar / rhos[i]
-
-        return betas
+            for i in range(1, dlen):
+                # h: n_states
+                h = alphas[i-1] @ self.m_trans
+                alpha_bar = h * self.m_out[:,choice[i]]
+                rhos[i] = np.sum(alpha_bar)
+                alphas[i] = alpha_bar / rhos[i]
 
 
-    def EM_step(self):
-        choice = self.choice
-        dlen = len(choice)
+            # backward step
+            # betas: timesteps x n_states
+            betas = np.ones((dlen, self.n_states))
 
-        alphas, rhos = self.forward()
-        betas = self.backward(rhos)
+            betas[dlen - 1] = np.ones((self.n_states))
+            #betas[dlen - 1] /= rhos[-1]
 
-        Px = 1
-        for i in range(len(rhos)):
-            Px += np.log(rhos[i])
+            for i in range(dlen - 1, 0, -1):
+                # h: n_states
+                h = self.m_out[:,choice[i]] * betas[i]
+                beta_bar = self.m_trans @ h
+                betas[i - 1] = beta_bar / rhos[i]
 
-        gammas = np.ones((dlen, self.n_states))
-        for i in range(dlen):
-            gammas[i] = alphas[i] * betas[i]
-            #gammas[i] /= np.sum(gammas[i])
+            for i in range(len(rhos)):
+                if rhos[i] <= 0:
+                    pdb.set_trace()
+                px[idx] += np.log(rhos[i])
 
-        #Px = alphas[0,:] @ betas[0,:]
+            gammas = np.ones((dlen, self.n_states))
+            for i in range(dlen):
+                gammas[i] = alphas[i] * betas[i]
+                #gammas[i] /= np.sum(gammas[i])
 
-        xi = np.zeros((dlen - 1, self.n_states, self.n_states))
+            xi = np.zeros((dlen - 1, self.n_states, self.n_states))
 
-        for t in range(dlen - 1):
-            for i in range(self.n_states):
-                for j in range(self.n_states):
-                    xi[t,i,j] = alphas[t,i] * self.m_trans[i,j] * self.m_out[j,choice[t + 1]] * betas[t + 1,j] / rhos[t + 1]
+            for t in range(dlen - 1):
+                for i in range(self.n_states):
+                    for j in range(self.n_states):
+                        xi[t,i,j] = alphas[t,i] * self.m_trans[i,j] * self.m_out[j,choice[t + 1]] * betas[t + 1,j] / rhos[t + 1]
 
+            _gammas += np.sum(gammas, axis=0)
+            _gammas_minus_one += np.sum(gammas[:-1,:], axis=0)
+            _xi += np.sum(xi, axis=0)
+            _inits += gammas[0]
+            _gamma_one_counts += np.sum(gammas[np.where(choice == 1)[0],:], axis=0)
 
-        #self.m_init = np.mean(gammas, axis=0)
-
+        self.m_init = _inits / np.sum(_inits)
 
         for i in range(self.n_states):
             for j in range(self.n_states):
-                self.m_trans[i,j] = np.sum(xi[:,i,j]) / np.sum(gammas[:-1,i])
+                self.m_trans[i,j] = _xi[i,j] / _gammas_minus_one[i]
 
         for i in range(self.n_states):
-            self.m_out[i,0] = np.sum(gammas[np.where(choice == 1)[0],i]) / np.sum(gammas[:,i])
+            self.m_out[i,0] = _gamma_one_counts[i] / _gammas[i]
             self.m_out[i,1] = 1 - self.m_out[i,0]
 
+        total_px = np.sum(px)
+        return total_px
 
-        print('Px', Px)
-        return Px
 
+    def learn(self, dts, steps=50):
+
+        for i in range(steps):
+            px = self._EM_step(dts)
+            print(f"step {i}: ll = {px}")
+        pdb.set_trace()
 
 
 
@@ -177,14 +176,14 @@ if __name__ == '__main__':
     one = ONE()
 
     dts = load_maybe_save(one, lab, subject)
+    sessions = [i[3] for i in dts]
 
     #g = glmhmm(dts)
 
-    g = hmm(dts)
+    g = hmm(states=4)
 
-    for i in range(100):
-        Pd = g.EM_step()
-    pdb.set_trace()
+
+    g.learn(sessions[1:45])
         
     
 
