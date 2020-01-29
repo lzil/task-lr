@@ -35,30 +35,26 @@ from one_tools import *
 # just get the overall performance per eid for given list of eids
 def get_perfs(dts):
     outs = []
-    for i, eid, dt in dts:
+    for dt in dts:
         feedback = dt.feedback
         zeros = dt.zero_counts()
 
         perf = np.sum(feedback == 1) / feedback.size
         
-        outs.append((i, eid, perf, zeros))
+        outs.append((perf, zeros))
 
     return outs
 
 
 def get_sess_data(dts):
     sdata = []
-    for i, eid, dt in dts:
-        try:
-            dt = load_data(one, eid)
-            dt.set_mask(included=True, zeros=False)
-            choice = dt.choice
-            contrasts = dt.contrasts
-            feedback = dt.feedback
+    for dt in dts:
+        dt.set_mask(included=True, zeros=False)
+        choice = dt.choice
+        contrasts = dt.contrasts
+        feedback = dt.feedback
 
-            sdata.append((i, eid, choice, contrasts, feedback))
-        except KeyError as e:
-            report_error(e, idx=i)
+        sdata.append((choice, contrasts, feedback))
 
     return sdata
 
@@ -94,49 +90,40 @@ def create_filter(fil_type, p=None):
 def get_smoothed_perfs(dts, fil):
     fil_len = fil.size
     outs = []
-    for i, eid, dt in dts:
-        try:
-            feedback = dt.feedback
+    for dt in dts:
+        feedback = dt.feedback
 
-            if feedback.size < fil_len * 2:
-                continue
+        if feedback.size < fil_len * 2:
+            continue
 
-            feedback = (feedback + 1) / 2
+        feedback = (feedback + 1) / 2
 
-            smooth = np.convolve(feedback, fil, mode='valid')
-            std = np.zeros_like(smooth)
+        smooth = np.convolve(feedback, fil, mode='valid')
+        std = np.zeros_like(smooth)
 
-            outs.append((i, smooth, std))
-            #print(f'eid {i}: {eid}')
-
-        except KeyError as e:
-            report_error(e, idx=i)
+        outs.append((i, smooth, std))
 
     return outs
 
 # get average performance instead, with standard deviation
 def get_averaged_perfs(dts, window=10):
     outs = []
-    for i, eid, dt in dts:
-        try:
-            feedback = dt.feedback
+    for dt in dts:
+        feedback = dt.feedback
 
-            num,_ = divmod(dt.session_len, window)
+        num,_ = divmod(dt.session_len, window)
 
-            feedback = (feedback + 1) / 2
+        feedback = (feedback + 1) / 2
 
-            perf_avg = []
-            perf_std = []
+        perf_avg = []
+        perf_std = []
 
-            for j in range(num):
-                fb = feedback[j*window:(j+1)*window]
-                perf_avg.append(np.mean(fb))
-                perf_std.append(np.var(fb))
+        for j in range(num):
+            fb = feedback[j*window:(j+1)*window]
+            perf_avg.append(np.mean(fb))
+            perf_std.append(np.var(fb))
 
-            outs.append((i, np.asarray(perf_avg), np.asarray(perf_std)))
-
-        except KeyError as e:
-            report_error(e, idx=i)
+        outs.append((np.asarray(perf_avg), np.asarray(perf_std)))
 
     return outs
 
@@ -144,7 +131,7 @@ def get_averaged_perfs(dts, window=10):
 # compute the biases
 def get_biases(dts):
     outs = []
-    for i, eid, dt in dts:
+    for dt in dts:
         feedback = dt.feedback
         contrasts = dt.contrasts
         choice = dt.choice
@@ -167,6 +154,6 @@ def get_biases(dts):
 
         perf = np.sum(feedback == 1) / feedback.size
         
-        outs.append((i, perf, left_perf, right_perf, left_stimuli_prop, left_choice_prop))
+        outs.append((perf, left_perf, right_perf, left_stimuli_prop, left_choice_prop))
 
     return outs

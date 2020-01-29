@@ -8,6 +8,7 @@ __pycache__
 ibl/labs
 ibl/cache
 ibl/cache2
+ibl/cache3
 figures
 ibl/*.pkl
 *_.*

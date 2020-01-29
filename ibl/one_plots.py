@@ -34,7 +34,7 @@ from one_compute import *
 cache = 'cache'
 figures = 'figures'
 
-debug = False
+debug = True
 
     
 # make simple plot for subject performance across sessions
@@ -44,10 +44,11 @@ def sess_perfs(lab, subject):
     mkdir_p(fig_path)
     
     dts = load_maybe_save(one, lab, subject)
-    outs = get_perfs(dts)
+    inds, _, _, session_dts = list(zip(*dts))
+    outs = get_perfs(session_dts)
 
     # plot all the subjects in different plots
-    inds, eids, perfs, zeros = list(zip(*outs))
+    perfs, zeros = list(zip(*outs))
     plt.figure(figsize=(18, 5))
     plt.plot(inds, perfs, 'ro-')
     for j in range(len(outs)):
@@ -74,10 +75,11 @@ def sess_data(lab, subject):
     mkdir_p(fig_path)
 
     dts = load_maybe_save(one, lab, subject)
-    outs = get_sess_data(dts)
+    inds, _, _, session_dts = list(zip(*dts))
+    outs = get_sess_data(session_dts)
 
     # plot all the subjects in different plots
-    inds, eids, choices, contrasts, feedback = list(zip(*outs))
+    choices, contrasts, feedback = list(zip(*outs))
 
     # iterate through all sessions
     for s in range(len(inds)):
@@ -130,13 +132,14 @@ def sess_data(lab, subject):
 # make plot for performance of a subject across all its sessions, averaged/smoothed somehow
 def subject_perfs(lab, subject, p_type='average'):
     dts = load_maybe_save(one, lab, subject)
+    inds, _, _, session_dts = list(zip(*dts))
 
     fig_path = f'{figures}/{lab}/{subject}'
     mkdir_p(fig_path)
 
     if p_type == 'average':
-        w = 20
-        outs = get_averaged_perfs(dts, window=w)
+        w = 40
+        outs = get_averaged_perfs(session_dts, window=w)
 
         f_name = f'{fig_path}/perf-avg-{w}.jpg'
 
@@ -144,11 +147,11 @@ def subject_perfs(lab, subject, p_type='average'):
         filter_type = 'flat1'
         p = 0.1
         fil = create_filter(filter_type, p=p)
-        outs = get_smoothed_perfs(dts, fil=fil)
+        outs = get_smoothed_perfs(session_dts, fil=fil)
 
         f_name = f'{fig_path}/perf-{filter_type}-{p}.jpg'
 
-    inds, perfs, stds = list(zip(*outs))
+    perfs, stds = list(zip(*outs))
 
 
     # takes a ton of code to get the right indices for the session numbers
@@ -237,9 +240,10 @@ def all_perfs(lab, cache='cache', figures='figures'):
         print(f'Starting on subject: {subject}')
 
         dts = load_maybe_save(one, lab, subject)
-        outs = get_perfs(dts)
+        inds, _, _, session_dts = list(zip(*dts))
+        outs = get_perfs(session_dts)
 
-        inds, eids, perfs, _ = list(zip(*outs))
+        perfs, _ = list(zip(*outs))
         row, col = divmod(ind, 3)
         arc = ax[row,col]
         arc.plot(inds, perfs, 'r.-')
@@ -268,9 +272,10 @@ def subject_biases(lab, subject):
     mkdir_p(fig_path)
 
     dts = load_maybe_save(one, lab, subject)
-    outs = get_biases(dts)
+    inds, _, _, session_dts = list(zip(*dts))
+    outs = get_biases(session_dts)
 
-    inds, perfs, lperfs, rperfs, lsprop, lcprop = list(zip(*outs))
+    perfs, lperfs, rperfs, lsprop, lcprop = list(zip(*outs))
     plt.figure(figsize=(18, 5))
     plt.plot(inds, lperfs, '-', c='salmon', lw=1, label='left stimulus performance')
     plt.plot(inds, rperfs, '-', c='royalblue', lw=1, label='right stimulus performance')
@@ -302,6 +307,78 @@ def subject_biases(lab, subject):
 
 
 
+def wheel_positions(lab, subject, session_num):
+    fig_path = f'{figures}/{lab}/{subject}'
+    mkdir_p(fig_path)
+
+    eids, sinfos = one.search(lab=lab, details=True, subject=subject)
+    eids, sinfos = order_eids(eids, sinfos)
+
+    eid = eids[session_num]
+
+    d_types = [
+        'trials.choice',
+        'trials.contrastLeft',
+        'trials.contrastRight',
+        'trials.feedbackType',
+        'trials.choice',
+        'trials.included',
+        'trials.response_times',
+        'trials.goCue_times',
+        'trials.intervals',
+        'wheel.position',
+        'wheel.timestamps'
+    ]
+
+    sess_data = load_data(one, eid, d_types=d_types)
+
+    groups = sess_data.wheel_indices()
+    wt = sess_data.wt
+    wp = sess_data.wp
+
+    start = 50
+    stop = 70
+    running_break = 0
+    last_pos = 0
+    plt.figure(figsize=(18, 2))
+    for i in range(start, stop):
+        if len(groups[i][1]) == 0:
+            print(f'skipping {i}, nothing in the group')
+            continue
+        timestamps = wt[groups[i][1]]
+        if last_pos != 0:
+            running_break += wt[groups[i][1][0]] - last_pos
+            timestamps -= running_break
+        last_pos = wt[groups[i][1][-1]]
+        positions = wp[groups[i][1]] - wp[groups[i][1][0]]
+        plt.plot(timestamps, positions, '-', lw=1, c='dodgerblue')
+
+        cxc = sess_data._cxc[i]
+        if cxc > 0:
+            color = 'lightgreen'
+        else:
+            color = 'lightcoral'
+
+        plt.axvspan(timestamps[0], timestamps[-1], facecolor=color, alpha=abs(cxc))
+        plt.vlines(timestamps[0], ymin=-200, ymax=200, linestyle='solid', linewidth=1,color='black')
+
+    plt.ylim([-.5,.5])
+    plt.tick_params(
+        axis='x',
+        bottom=False,
+        labelbottom=False)
+    plt.xlim([wt[groups[start][1][0]]-.1, timestamps[-1]+.1])
+
+
+    if debug:
+        plt.show()
+    else:
+        f_name = f'{fig_path}/wheel-{num}.jpg'
+        plt.savefig(f_name)
+        print(f'Saved {f_name}')
+        plt.close()
+
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -310,11 +387,13 @@ if __name__ == '__main__':
         'subject_perfs',
         'all_perfs',
         'sess_perfs',
-        'subject_bias'
+        'subject_bias',
+        'wheel_positions'
     ]
     parser.add_argument('action', choices=actions)
     parser.add_argument('-l', '--lab')
     parser.add_argument('-s', '--subject')
+    parser.add_argument('-n', '--session', type=int)
 
     args = parser.parse_args()
 
@@ -341,6 +420,11 @@ if __name__ == '__main__':
     elif args.action == 'subject_bias':
         assert args.subject is not None
         subject_biases(args.lab, args.subject)
+
+    elif args.action == 'wheel_positions':
+        assert args.subject is not None
+        assert args.session is not None
+        wheel_positions(args.lab, args.subject, args.session)
 
 
 

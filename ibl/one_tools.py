@@ -41,6 +41,29 @@ class SessionData():
         self._feedback = data['trials.feedbackType']
         self._included = data['trials.included']
 
+        self._rtimes = None
+        self._gtimes = None
+        self._intervals = None
+        self.wp = None
+        self.wt = None
+
+        if 'trials.response_times' in data:
+            self._rtimes = data['trials.response_times']
+            
+        if 'trials.goCue_times' in data:
+            self._gtimes = data['trials.goCue_times']
+            
+        if 'trials.intervals' in data:
+            self._intervals = data['trials.intervals']
+            
+
+        if 'wheel.position' in data:
+            self.wp = data['wheel.position']
+            
+        if 'wheel.timestamps' in data:
+            self.wt = data['wheel.timestamps']
+            
+
         if err:
             if self._choice is None:
                 raise KeyError("choice array missing")
@@ -91,7 +114,38 @@ class SessionData():
     @property
     def contrasts(self):
         return self._contrasts[self._mask == 1]
+
+    def wheel_indices(self):
+        assert self.wp is not None
+        assert self.wt is not None
+        assert self._intervals is not None
+        w_ind = 0
+        groups = []
+        cur_group = []
+        for i in range(len(self._choice)):
+            while w_ind < len(self.wt) and self.wt[w_ind] < self._rtimes[i]:#self._intervals[i,1]:
+                if self.wt[w_ind] >= self._gtimes[i]:
+                    cur_group.append(w_ind)
+                w_ind += 1
+            groups.append((i,cur_group))
+            cur_group = []
+
+        # only take those groups not in the mask
+        #groups = list(filter(lambda x: self._mask[x[0]] == 1, groups))
+
+        return groups
+
+    @property
+    def rtimes(self):
+        return self._rtimes[self._mask == 1]
+
+    @property
+    def gtimes(self):
+        return self._gtimes[self._mask == 1]
     
+    @property
+    def intervals(self):
+        return self._intervals[np.where(self._mask == 1)[0],:]
 
     def zero_counts(self):
         return np.sum(self._zero_contrasts)
@@ -146,35 +200,30 @@ def load_data(one, eid, d_types=DEFAULT_D_TYPES, cache_dir='labs', sess_type=Tru
 
 
 
-def get_subject_data(one, lab, subject, d_types=DEFAULT_D_TYPES):
-    eids, sinfos = one.search(lab=lab, details=True, subject=subject)
-    eids, sinfos = order_eids(eids, sinfos)
-
-    dts = []
-
-    print(f'Gathering {lab}/{subject}...')
-    for i, eid in enumerate(eids):
-        try:
-            dt = load_data(one, eid, d_types=d_types, err=True)
-            dts.append((i, eid, dt))
-        except KeyError as e:
-            report_error(e, idx=i)
-    print(f'Finished {lab}/{subject}.')
-
-    return dts
-
-
-
-def load_maybe_save(one, lab, subject, base_dir='cache'):
+def load_maybe_save(one, lab, subject, dtypes=DEFAULT_D_TYPES, base_dir='cache'):
     cache_path = f'{base_dir}/{lab}/{subject}'
     mkdir_p(cache_path)
 
     # if performances are already done no point recomputing
     f_name = f'{cache_path}/data.pkl'
     if not os.path.isfile(f_name):
-        dts = get_subject_data(one, lab, subject)
+
+        eids, sinfos = one.search(lab=lab, details=True, subject=subject)
+        eids, sinfos = order_eids(eids, sinfos)
+
+        dts = []
+        print(f'Gathering {lab}/{subject}...')
+        for i, eid in enumerate(eids):
+            try:
+                dt = load_data(one, eid, d_types=d_types, err=True)
+                dts.append((i, eid, sinfos[i], dt))
+            except KeyError as e:
+                report_error(e, idx=i)
+        print(f'Finished {lab}/{subject}.')
+
         with open(f_name, 'wb') as f:
             pkl.dump(dts, f)
+
     else:
         with open(f_name, 'rb') as f:
             dts = pkl.load(f)
