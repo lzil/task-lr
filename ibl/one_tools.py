@@ -123,7 +123,8 @@ class SessionData():
         groups = []
         cur_group = []
         for i in range(len(self._choice)):
-            while w_ind < len(self.wt) and self.wt[w_ind] < self._rtimes[i]:#self._intervals[i,1]:
+            #pdb.set_trace()
+            while w_ind < len(self.wt) and self.wt[w_ind] <= self._rtimes[i]:#self._intervals[i,1]:
                 if self.wt[w_ind] >= self._gtimes[i]:
                     cur_group.append(w_ind)
                 w_ind += 1
@@ -200,7 +201,7 @@ def load_data(one, eid, d_types=DEFAULT_D_TYPES, cache_dir='labs', sess_type=Tru
 
 
 
-def load_maybe_save(one, lab, subject, dtypes=DEFAULT_D_TYPES, base_dir='cache'):
+def load_maybe_save(one, lab, subject, d_types=DEFAULT_D_TYPES, base_dir='cache'):
     cache_path = f'{base_dir}/{lab}/{subject}'
     mkdir_p(cache_path)
 

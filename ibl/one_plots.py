@@ -232,9 +232,9 @@ def all_perfs(lab, cache='cache', figures='figures'):
 
     eids, sinfos = one.search(lab=lab, details=True)
     subjects = get_subject_counts(sinfos)
-    subjects, counts = zip(*subjects[:6])
+    subjects, counts = zip(*subjects[:9])
 
-    fig, ax = plt.subplots(nrows=2, ncols=3, sharey=True, squeeze=False, figsize=(14, 6))
+    fig, ax = plt.subplots(nrows=3, ncols=3, sharey=True, squeeze=False, figsize=(14, 9))
 
     for ind, subject in enumerate(subjects):
         print(f'Starting on subject: {subject}')
@@ -373,7 +373,7 @@ def wheel_positions(lab, subject, session_num):
     if debug:
         plt.show()
     else:
-        f_name = f'{fig_path}/wheel-{num}.jpg'
+        f_name = f'{fig_path}/wheel-{session}-{start}-{stop}.jpg'
         plt.savefig(f_name)
         print(f'Saved {f_name}')
         plt.close()

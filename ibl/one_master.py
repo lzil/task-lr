@@ -124,6 +124,10 @@ if __name__ == '__main__':
     cache_path = f'{cache}/{lab}/{subject}'
     f_name = f'{cache_path}/raw.pkl'
 
+    sesses = load_maybe_save(one, lab, subject)
+
+    print(sesses[25], sesses[75])
+
     
 
 

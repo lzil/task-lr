@@ -28,7 +28,7 @@ def order_sessions(rows):
     return sorted(rows, key=lambda r: datetime.datetime.strptime(r['date'], '%d-%b-%Y'))
 
 
-if __name__ == '__main__':
+def analyze_training():
     data_file = os.path.join('data', 'TRAINING.csv')
     
     with open(data_file, 'r') as f:
@@ -89,3 +89,17 @@ if __name__ == '__main__':
     plt.title(subject)
 
     plt.show()
+
+
+def analyze_trials():
+    pass
+
+
+
+if __name__ == '__main__':
+
+    analyze_training()
+
+
+
+    
